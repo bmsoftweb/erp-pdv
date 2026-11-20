@@ -1,7 +1,7 @@
 /** Conferência da montagem da nota do PDV (IAT, desconto rateado, troco, modelo). Rode com: npx tsx --env-file=.env server/notas.check.ts */
 import assert from 'node:assert/strict';
 import { pool } from './db.js';
-import { montarDocumento } from './notas.js';
+import { comST, montarDocumento } from './notas.js';
 
 const grupoTrib = { grupo_trib_id: 1, grupo_descricao: 'Revenda', grupo_ativo: 1, origem: 0, cfop_dentro_uf: '5102', cfop_fora_uf: '6102', csosn: '102', aliquota_credito_sn: 0, cst_icms: null, aliquota_icms: 0, cst_pis: '49', aliquota_pis: 0, cst_cofins: '49', aliquota_cofins: 0, cst_ibscbs: null, cclass_trib: null };
 (pool as any).query = async (sql: string) => {
@@ -46,6 +46,12 @@ const c = await montarDocumento({ ...venda, ajusteTotal: 0, pagamentos: [{ tPag:
 assert.deepEqual((c.documento as any).pagamentos[0].cartao, { integracao: 2, cnpj: '01425787000104', bandeira: '02', autorizacao: 'X1' });
 await assert.rejects(montarDocumento({ ...venda, ajusteTotal: 0, pagamentos: [{ tPag: '03', valor: 50, intermediadorId: 6 }] } as any, emit, 0, 1), /Troco só em pagamento com dinheiro/);
 await assert.rejects(montarDocumento({ ...venda, pagamentos: [{ tPag: '01', valor: 50, intermediadorId: 0 }] } as any, emit, 0, 1), /intermediador/);
+
+// CEST só com substituição tributária: CSOSN 500 (Simples) e CST 60 (normal) exigem; CSOSN 102 não
+assert.equal(comST({ csosn: '500' }, true), true);
+assert.equal(comST({ csosn: '102', cst_icms: '60' }, true), false);
+assert.equal(comST({ cst_icms: '60' }, false), true);
+assert.equal(comST({ cst_icms: '00' }, false), false);
 
 console.log('notas: ok');
 process.exit(0);

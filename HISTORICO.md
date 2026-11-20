@@ -2,6 +2,10 @@
 
 Mais recente primeiro. PATCH a cada envio ao GitHub; MAJOR/MINOR só quando pedido.
 
+## 0.1.3 — 2026-11-20
+
+- Venda recusa item com substituição tributária sem CEST (o PAF-NFC-e exige o cadastro completo, Requisito VII).
+
 ## 0.1.2 — 2026-11-20
 
 - Abertura de caixa só com o troco inicial: saiu o arquivo de configuração (.ini), que não aplicava nenhum valor (série, número e chave vêm do erp-nfe).

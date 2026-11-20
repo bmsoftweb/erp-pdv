@@ -105,6 +105,12 @@ function icmsDoItem(i: any, simples: boolean, rot: string) {
   return { csosn: String(i.csosn), ...(credito > 0 && { aliquotaCredito: credito }) };
 }
 
+/** ICMS por substituição tributária: só nesses o CEST é obrigatório */
+const CSOSN_ST = ['201', '202', '203', '500'];
+const CST_ST = ['10', '30', '60', '70'];
+export const comST = (i: any, simples: boolean) =>
+  simples ? CSOSN_ST.includes(String(i.csosn ?? '')) : CST_ST.includes(String(i.cst_icms ?? ''));
+
 async function serieAtiva(emitente: number, modelo: string): Promise<number> {
   const [[s]]: any = await pool.query('SELECT serie FROM nfe_series WHERE empresa_id = ? AND modelo = ? AND ativo = 1 ORDER BY serie LIMIT 1', [emitente, modelo]);
   return s?.serie ?? falha(`Nenhuma série ativa do modelo ${modelo} no erp-nfe (tela Séries).`);
@@ -185,6 +191,7 @@ export async function montarDocumento(v: Venda, emit: any, grupo: number, empres
     if (final <= 0) falha(`${rot} (${p.nome}): o desconto zera o item.`);
     if (digitos(p.ncm).length !== 8) falha(`${rot} (${p.nome}): produto sem NCM. Preencha nos dados fiscais do produto (erp-estoque).`);
     if (!p.grupo_trib_id) falha(`${rot} (${p.nome}): produto sem grupo tributário. Preencha nos dados fiscais do produto (erp-estoque).`);
+    if (comST(p, simples) && digitos(p.cest).length !== 7) falha(`${rot} (${p.nome}): produto com substituição tributária sem CEST. Preencha nos dados fiscais do produto (erp-estoque).`);
     const cfop = interestadual ? p.cfop_fora_uf : p.cfop_dentro_uf;
     if (!cfop) falha(`${rot} (${p.nome}): o grupo tributário não tem CFOP ${interestadual ? 'interestadual' : 'estadual'}.`);
     const gtin = digitos(p.codigo_barras);
