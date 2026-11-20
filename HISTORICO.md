@@ -2,6 +2,10 @@
 
 Mais recente primeiro. PATCH a cada envio ao GitHub; MAJOR/MINOR só quando pedido.
 
+## 0.1.5 — 2026-11-20
+
+- Publicação na Vercel: a API caía ao carregar o `package.json` (import de JSON sem `with { type: 'json' }`); variáveis de ambiente cadastradas no projeto.
+
 ## 0.1.4 — 2026-11-20
 
 - Dados da empresa desenvolvedora e da arquitetura do PAF-NFC-e (Identificação do Menu Fiscal, registro U2 do Arquivo I e arqBD/arqSist do XML) passam a vir da tabela `sys_paf`, uma linha para todo o ERP (script `extras/2026-11-20_sys_paf.sql`); saem as variáveis `PAF_*` do `.env`.

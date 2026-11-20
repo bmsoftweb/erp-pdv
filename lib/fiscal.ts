@@ -1,7 +1,7 @@
 /**
  * Regras fiscais do PDV usadas no navegador e no servidor (PAF-NFC-e de SC, Ato DIAT 54/2026).
  */
-import pacote from '../package.json';
+import pacote from '../package.json' with { type: 'json' };
 
 /** Identificação do PAF-NFC-e: vai no obsFisco "PAF" e no verProc de todo DF-e (Requisito IV, § 4º) */
 export const PAF = {
