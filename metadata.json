@@ -1,0 +1,6 @@
+{
+  "name": "PDV Cupom Fiscal",
+  "description": "Ponto de venda simples para criação de cupom fiscal com busca por EAN via MySQL",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
