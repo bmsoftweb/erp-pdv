@@ -2,6 +2,10 @@
 
 Mais recente primeiro. PATCH a cada envio ao GitHub; MAJOR/MINOR só quando pedido.
 
+## 0.1.4 — 2026-11-20
+
+- Dados da empresa desenvolvedora e da arquitetura do PAF-NFC-e (Identificação do Menu Fiscal, registro U2 do Arquivo I e arqBD/arqSist do XML) passam a vir da tabela `sys_paf`, uma linha para todo o ERP (script `extras/2026-11-20_sys_paf.sql`); saem as variáveis `PAF_*` do `.env`.
+
 ## 0.1.3 — 2026-11-20
 
 - Venda recusa item com substituição tributária sem CEST (o PAF-NFC-e exige o cadastro completo, Requisito VII).

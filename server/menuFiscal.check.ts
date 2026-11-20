@@ -8,6 +8,7 @@ const chave = (tpEmis: string, modelo: string) => `42261108511951000137650010000
 // Banco de mentira: cada consulta do arquivoI devolve um exemplo
 (pool as any).query = async (sql: string) => {
   if (sql.includes('FROM sys_empresas')) return [[{ inscricao_municipal: '12345' }]];
+  if (sql.includes('FROM sys_paf')) return [[{ desenvolvedor_cnpj: '08511951000137', desenvolvedor_razao: 'BMSoft Sistemas Ltda', desenvolvedor_ie: '', desenvolvedor_im: '' }]];
   if (sql.includes('FROM mov_nfce_pagamentos')) return [[{ data: '2026-11-20', codigo: '001', tpag: '03', modelo: '65', valor: '10.50' }]];
   if (sql.includes('fis_grupos_tributarios'))
     return [[{ id: 7, sku: 'CAFE500', nome: 'Café Torrado 500g', ncm: '09012100', cest: '1709600', preco_venda: '12.34', iat: 'T', ippt: 'T', unidade: 'PCT', cst_icms: '00', aliquota_icms: '17', cst_ibscbs: '000', cclass_trib: '000001' }]];
@@ -23,8 +24,6 @@ const chave = (tpEmis: string, modelo: string) => `42261108511951000137650010000
   throw new Error('consulta inesperada: ' + sql.slice(0, 60));
 };
 
-process.env.PAF_DESENVOLVEDOR_CNPJ = '08511951000137';
-process.env.PAF_DESENVOLVEDOR_RAZAO = 'BMSoft Sistemas Ltda';
 const emit = { id: 1, cnpj: '08511951000137', inscricao_estadual: '255.123.456', razao_social: 'Mercado São João' };
 const texto = (await arquivoI(emit, 1, 0, { estoque: 'total' }))!;
 assert.ok(texto.endsWith('\r\n'));
@@ -35,8 +34,9 @@ for (const l of linhas) {
   assert.equal(l.length, TAMANHO[l.slice(0, 2)], `${l.slice(0, 2)} com ${l.length} posições`);
   assert.ok(/^[\x20-\x7E]+$/.test(l), `${l.slice(0, 2)} fora do ASCII`);
 }
-const [u1, , , a2, p2, e2, j1, j2, n1] = linhas;
+const [u1, u2, , a2, p2, e2, j1, j2, n1] = linhas;
 assert.equal(u1.slice(44, 94).trim(), 'MERCADO SAO JOAO');
+assert.equal(u2.slice(2, 16) + u2.slice(44, 94).trim(), '08511951000137BMSOFT SISTEMAS LTDA'); // vem da sys_paf
 assert.equal(a2, 'A2' + '20261120' + '001       ' + '03' + '1' + '000000001050');
 assert.equal(p2.slice(137, 139), 'TT'); // IAT, IPPT
 assert.equal(p2.slice(141, 145), '1700'); // alíquota 17%

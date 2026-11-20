@@ -26,11 +26,11 @@ const dataValida = (s: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s ?? '')) 
 /** Código da mercadoria na Tabela de Mercadorias: o mesmo cProd que vai no DF-e */
 const codigoMercadoria = (p: any) => String(p.sku || p.id);
 
-function arquitetura() {
-  return {
-    arqBD: process.env.PAF_ARQ_BD || 'Banco de dados na nuvem',
-    arqSist: process.env.PAF_ARQ_SIST || 'PAF-NFC-e Nuvem',
-  };
+/** Empresa desenvolvedora e arquitetura (tabela sys_paf, uma linha para todo o ERP; script extras/2026-11-20_sys_paf.sql) */
+async function dadosPaf() {
+  const [[p]]: any = await pool.query('SELECT * FROM sys_paf WHERE id = 1');
+  if (!p) falha('Dados do PAF-NFC-e não cadastrados (tabela sys_paf).');
+  return p;
 }
 
 /** Arquivo I (texto) — exportado para a conferência */
@@ -42,7 +42,8 @@ export async function arquivoI(emit: any, empresa: number, grupo: number, f: { i
   // ----- U1, U2, U3 -----
   const [[se]]: any = await pool.query('SELECT inscricao_municipal FROM sys_empresas WHERE id = ?', [empresa]);
   linhas.push('U1' + N(emit.cnpj, 14) + X(digitos(emit.inscricao_estadual), 14) + X(digitos(se?.inscricao_municipal), 14) + X(String(emit.razao_social).toUpperCase(), 50));
-  linhas.push('U2' + N(process.env.PAF_DESENVOLVEDOR_CNPJ, 14) + X(digitos(process.env.PAF_DESENVOLVEDOR_IE), 14) + X(digitos(process.env.PAF_DESENVOLVEDOR_IM), 14) + X(String(process.env.PAF_DESENVOLVEDOR_RAZAO || '').toUpperCase(), 50));
+  const paf = await dadosPaf();
+  linhas.push('U2' + N(paf.desenvolvedor_cnpj, 14) + X(digitos(paf.desenvolvedor_ie), 14) + X(digitos(paf.desenvolvedor_im), 14) + X(String(paf.desenvolvedor_razao).toUpperCase(), 50));
   linhas.push('U3' + X(PAF.nome.toUpperCase(), 50) + X(PAF.versao, 10));
   let dados = 0;
 
@@ -157,10 +158,10 @@ async function xmlAssinado(emit: any, uid: number, nroArquivo: string, texto: st
   const hora = agora.slice(11, 19).replace(/:/g, '');
   const conteudo = texto === null ? 'SEM INFORMACOES' : Buffer.from(texto, 'latin1').toString('base64');
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-  const { arqBD, arqSist } = arquitetura();
+  const paf = await dadosPaf();
   const xml =
     `<menuFiscal xmlns="http://www.sef.sc.gov.br/nfce"><arquivo nroArquivo="${texto === null ? '0' : nroArquivo}" data="${data}" hora="${hora}" ` +
-    `arqBD="${esc(arqBD)}" arqSist="${esc(arqSist)}"><![CDATA[${conteudo}]]></arquivo></menuFiscal>`;
+    `arqBD="${esc(paf.arq_bd)}" arqSist="${esc(paf.arq_sist)}"><![CDATA[${conteudo}]]></arquivo></menuFiscal>`;
   const r = await postar(emit.id, uid, '/api/assinar-menu-fiscal', { xml });
   const d: any = await r.json().catch(() => ({}));
   if (!r.ok || !d?.xml) falha(mensagemDe(d, r.status));
@@ -171,16 +172,20 @@ export function createMenuFiscalRouter() {
   const r = Router();
 
   /** Identificação do PAF-NFC-e (Requisito VI, I); nome, versão e data do build vêm do próprio front-end */
-  r.get('/menu-fiscal/identificacao', rota(async () => ({
-    desenvolvedor: {
-      cnpj: process.env.PAF_DESENVOLVEDOR_CNPJ || '',
-      razaoSocial: process.env.PAF_DESENVOLVEDOR_RAZAO || '',
-      endereco: process.env.PAF_DESENVOLVEDOR_ENDERECO || '',
-      telefone: process.env.PAF_DESENVOLVEDOR_TELEFONE || '',
-      responsavel: process.env.PAF_DESENVOLVEDOR_RESPONSAVEL || '',
-    },
-    ...arquitetura(),
-  })));
+  r.get('/menu-fiscal/identificacao', rota(async () => {
+    const paf = await dadosPaf();
+    return {
+      desenvolvedor: {
+        cnpj: paf.desenvolvedor_cnpj,
+        razaoSocial: paf.desenvolvedor_razao,
+        endereco: paf.desenvolvedor_endereco,
+        telefone: paf.desenvolvedor_telefone,
+        responsavel: paf.desenvolvedor_responsavel,
+      },
+      arqBD: paf.arq_bd,
+      arqSist: paf.arq_sist,
+    };
+  }));
 
   /** Registros do PAF-NFC-e (Requisito VI, II): Arquivo I assinado */
   r.post('/menu-fiscal/registros', rota(async (req, res, s) => {
