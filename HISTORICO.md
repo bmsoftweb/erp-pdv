@@ -2,6 +2,11 @@
 
 Mais recente primeiro. PATCH a cada envio ao GitHub; MAJOR/MINOR só quando pedido.
 
+## 0.1.2 — 2026-11-20
+
+- Abertura de caixa só com o troco inicial: saiu o arquivo de configuração (.ini), que não aplicava nenhum valor (série, número e chave vêm do erp-nfe).
+- Base local sem a tabela de atalhos do .ini (versão 2 da base, apaga a tabela antiga).
+
 ## 0.1.1 — 2026-11-20
 
 Primeiro envio ao repositório bmsoftweb/erp-pdv.

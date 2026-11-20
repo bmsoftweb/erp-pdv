@@ -10,7 +10,7 @@ import { Intermediadores, Intermediador } from '@/components/Intermediadores';
 import { EditarItem } from '@/components/EditarItem';
 import { Toggle } from '@/components/Toggle';
 import { NumberField } from '@/components/NumberField';
-import { db, LocalProduct, substituirProdutos, buscarProdutos, getSavedIniFileName, getSavedIniHandle, saveIniHandle, disconnectIniFile, readIniFileContent } from '@/lib/localDB';
+import { db, LocalProduct, substituirProdutos, buscarProdutos } from '@/lib/localDB';
 
 interface Product {
   id: number;
@@ -140,8 +140,6 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
   const [consultaProduct, setConsultaProduct] = useState<LocalProduct | null>(null);
   const consultaInputRef = useRef<HTMLInputElement>(null);
 
-  const [iniStatus, setIniStatus] = useState<{ connected: boolean; name: string | null }>({ connected: false, name: null });
-  const [savedIniName, setSavedIniName] = useState<string | null>(null);
   const [isStartupModalOpen, setIsStartupModalOpen] = useState(true);
   const [startingTroco, setStartingTroco] = useState('0,00');
   const [caixaFund, setCaixaFund] = useState<number>(0);
@@ -521,118 +519,6 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
       window.removeEventListener('online', transmitir);
     };
   }, []);
-
-  useEffect(() => {
-    getSavedIniFileName().then((name) => {
-      setSavedIniName(name);
-      if (name) {
-        setIniStatus({ connected: false, name });
-      }
-    });
-  }, []);
-
-  const checkAndShowIframeError = (err: any, defaultMsg: string, toastId: string) => {
-    if (err.name === 'AbortError') {
-      toast.dismiss(toastId);
-      return;
-    }
-    
-    console.error('Arquivo local:', err);
-    const isIframeErr = err.name === 'SecurityError' || 
-                        (err.message && (
-                          err.message.includes('frame') || 
-                          err.message.includes('origin') || 
-                          err.message.includes('picker') ||
-                          err.message.includes('allowed to show')
-                        ));
-                        
-    if (isIframeErr) {
-      toast.error(
-        'Acesso bloqueado pelo iFrame! Para conectar arquivos do seu computador, você precisa abrir este aplicativo em uma Nova Aba devido às restrições de segurança do navegador.',
-        { id: toastId, duration: 8000 }
-      );
-    } else {
-      toast.error(defaultMsg, { id: toastId });
-    }
-  };
-
-  const processAndApplyIni = async (handle: any) => {
-    try {
-      await readIniFileContent(handle);
-      // Série, número e chave da NFC-e vêm do erp-nfe: o PAF não deixa o operador definir (Requisito III)
-      setIniStatus({ connected: true, name: handle.name });
-      toast.info('Arquivo INI conectado.', { description: 'Série, número e chave da NFC-e vêm do erp-nfe; o INI não os altera.' });
-    } catch (err) {
-      console.error('Failed to read and apply INI configuration:', err);
-      toast.error('Não foi possível processar o arquivo INI.');
-    }
-  };
-
-  const handleConnectIniFile = async () => {
-    try {
-      if (typeof window === 'undefined' || !('showOpenFilePicker' in window)) {
-        toast.error('Seu navegador não suporta a File System Access API para conexão direta.');
-        return;
-      }
-      const [handle] = await (window as any).showOpenFilePicker({
-        types: [{
-          description: 'Arquivo de Configuração INI',
-          accept: {
-            'text/plain': ['.ini', '.txt', '.conf', '.cfg']
-          }
-        }],
-        excludeAcceptAllOption: true,
-        multiple: false
-      });
-      
-      const opts = { mode: 'readonly' };
-      if (await handle.queryPermission(opts) !== 'granted') {
-        if (await handle.requestPermission(opts) !== 'granted') {
-          toast.error('Permissão de leitura negada.');
-          return;
-        }
-      }
-      
-      toast.loading('Lendo arquivo de configuração INI...', { id: 'ini-conn' });
-      await saveIniHandle(handle);
-      setSavedIniName(handle.name);
-      await processAndApplyIni(handle);
-      toast.success(`Configuração "${handle.name}" conectada e importada com sucesso!`, { id: 'ini-conn' });
-    } catch (err: any) {
-      checkAndShowIframeError(err, 'Falha ao abrir e conectar o arquivo INI.', 'ini-conn');
-    }
-  };
-
-  const handleReconnectSavedIniFile = async () => {
-    try {
-      const handle = await getSavedIniHandle();
-      if (!handle) {
-        return false;
-      }
-      
-      const opts = { mode: 'readonly' };
-      if (await handle.queryPermission(opts) !== 'granted') {
-        toast.info('Por favor, autorize a leitura para reestabelecer a importação do arquivo .ini.');
-        if (await handle.requestPermission(opts) !== 'granted') {
-          toast.error('Permissão negada. Não foi possível reconectar o arquivo .ini.');
-          return false;
-        }
-      }
-      
-      await processAndApplyIni(handle);
-      return true;
-    } catch (err: any) {
-      console.warn('Falha ao reconectar ao arquivo INI:', err);
-      return false;
-    }
-  };
-
-  const handleDisconnectIniFileWeb = async () => {
-    await disconnectIniFile();
-    setSavedIniName(null);
-    setIniStatus({ connected: false, name: null });
-    toast.success('Arquivo de configuração .ini desconectado.');
-  };
 
   const closeConsulta = () => {
      setIsConsultaOpen(false);
@@ -1846,62 +1732,9 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
             </div>
 
             <div className="p-6 space-y-6 overflow-y-auto max-h-[70vh]">
-              {/* INI Configuration Section */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">1. Arquivo de Configuração (.ini)</h4>
-                  <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                    iniStatus.connected 
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-700' 
-                      : 'bg-amber-50 border-amber-200 text-amber-700'
-                  }`}>
-                    <div className={`w-1.5 h-1.5 rounded-full ${iniStatus.connected ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
-                    <span>{iniStatus.connected ? 'Configuração Ativa' : 'Padrão do Sistema'}</span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-3">
-                  <button
-                    type="button"
-                    onClick={handleConnectIniFile}
-                    className="flex items-center justify-center gap-2 p-3 border border-blue-100 hover:border-blue-300 bg-blue-50/20 hover:bg-blue-50 rounded-2xl transition-all cursor-pointer group"
-                  >
-                    <FileText className="text-blue-600 group-hover:scale-105 transition-transform" size={18} />
-                    <span className="text-xs font-bold text-blue-700">Conectar Arquivo de Configuração (.ini)</span>
-                  </button>
-                </div>
-
-                {savedIniName && (
-                  <div className="p-3 bg-blue-50/30 rounded-xl border border-blue-200 flex items-center justify-between animate-in slide-in-from-top-1">
-                    <div className="text-xs text-blue-900 pr-2 flex items-center gap-1.5">
-                      <FileText size={14} className="text-blue-500" />
-                      <span>Arquivo salvo: <strong>{savedIniName}</strong></span>
-                    </div>
-                    <div className="flex gap-2">
-                      {!iniStatus.connected && (
-                        <button
-                          type="button"
-                          onClick={handleReconnectSavedIniFile}
-                          className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
-                        >
-                          Carregar
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={handleDisconnectIniFileWeb}
-                        className="px-2.5 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-xs font-bold transition-colors cursor-pointer"
-                      >
-                        Desconectar
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
               {/* Troco em Caixa Section */}
-              <div className="space-y-3 pt-4 border-t border-gray-100">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">2. Troco Inicial (Fundo de Caixa)</h4>
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">Troco Inicial (Fundo de Caixa)</h4>
                 <p className="text-xs text-gray-500 leading-relaxed">
                   Informe a quantidade de dinheiro físico em caixa para iniciar o fluxo diário e fornecer o troco aos clientes.
                 </p>
