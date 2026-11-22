@@ -4,23 +4,40 @@
    só valeriam dentro de .dark, que o PDV nunca põe */
 @custom-variant dark (&:is(.dark *));
 
+/* Fonte e fundo dos outros módulos (erp-vendas/erp-estoque): Jost, paleta stone */
+@theme {
+  --font-sans: "Jost", ui-sans-serif, system-ui, sans-serif;
+}
+html {
+  @apply font-sans;
+}
+body {
+  @apply bg-stone-100 text-stone-800;
+  /* Teclado virtual aberto (telas touch): a página termina em cima dele */
+  padding-bottom: var(--teclado, 0px);
+}
+/* Diálogos e fundos escuros também terminam em cima do teclado virtual (fora de camada: vence o inset-0) */
+.fixed.inset-0 {
+  bottom: var(--teclado, 0px);
+}
+
 /* ==========================================
    CAMPOS DE ENTRADA (padrão do erp-vendas)
    Moldura de 1px com cantos arredondados; barra de 2px à esquerda: verde = opcional, âmbar = obrigatório.
    Foco: moldura de 2px na cor da barra e fundo um pouco mais escuro.
-   Só dentro de .campos-padrao (tela de login): as telas antigas do PDV ficam como estão.
+   Vale para todos os campos do PDV (modelo: erp-estoque).
    ========================================== */
-.campos-padrao :where(input, select, textarea):where(:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="hidden"])) {
-  border: 1px solid rgba(120, 113, 108, 0.22) !important;
+:where(input, select, textarea):where(:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="hidden"])) {
+  border: 1px solid rgba(120, 113, 108, 0.12) !important;
   --campo-cor: #10b981;
   border-left-width: 2px !important;
   border-left-color: var(--campo-cor) !important;
   border-radius: 0.375rem !important;
 }
-.campos-padrao :where(input, select, textarea):where(:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="hidden"])):where(:required) {
+:where(input, select, textarea):where(:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="hidden"])):where(:required) {
   --campo-cor: #eab308;
 }
-.campos-padrao :where(input, select, textarea):where(:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="hidden"])):focus {
+:where(input, select, textarea):where(:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="image"]):not([type="hidden"])):focus {
   outline: none !important;
   border-top-color: var(--campo-cor) !important;
   border-right-color: var(--campo-cor) !important;
@@ -29,41 +46,41 @@
   background-image: linear-gradient(rgba(0, 0, 0, 0.06), rgba(0, 0, 0, 0.06)) !important;
 }
 
-/* Selects das telas novas (padrão do erp-vendas), só dentro de .campos-padrao */
+/* Selects (padrão do erp-estoque) */
 /* Lista aberta do select com a mesma moldura arredondada (select customizável: Chrome/Edge 135+;
    os outros navegadores ignoram e mostram a lista nativa) */
 @supports (appearance: base-select) {
-  .campos-padrao select:not([multiple]),
-  .campos-padrao select:not([multiple])::picker(select) {
+  select:not([multiple]),
+  select:not([multiple])::picker(select) {
     appearance: base-select;
   }
-  .campos-padrao select:not([multiple])::picker(select) {
-    border: 1px solid rgba(120, 113, 108, 0.22);
+  select:not([multiple])::picker(select) {
+    border: 1px solid rgba(120, 113, 108, 0.12);
     border-radius: 0.375rem;
     margin-top: 2px;
     padding: 4px 0;
     background: #fff;
     box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15);
   }
-  .dark .campos-padrao select:not([multiple])::picker(select) {
+  .dark select:not([multiple])::picker(select) {
     background: #1c1917;
   }
-  .campos-padrao select:not([multiple]) option {
+  select:not([multiple]) option {
     padding: 6px 12px;
     font-size: 0.75rem;
     color: #292524;
   }
-  .dark .campos-padrao select:not([multiple]) option {
+  .dark select:not([multiple]) option {
     color: #f5f5f4;
   }
-  .campos-padrao select:not([multiple]) option::checkmark {
+  select:not([multiple]) option::checkmark {
     display: none;
   }
   /* Seta: chevron fino cinza no lugar do triângulo preto; vira para cima com a lista aberta */
-  .campos-padrao select:not([multiple]) {
+  select:not([multiple]) {
     column-gap: 6px; /* espaço mínimo entre o texto e a seta */
   }
-  .campos-padrao select:not([multiple])::picker-icon {
+  select:not([multiple])::picker-icon {
     content: '';
     width: 14px;
     height: 14px;
@@ -73,34 +90,34 @@
     mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
     transition: rotate 0.15s;
   }
-  .campos-padrao select:not([multiple]):hover::picker-icon {
+  select:not([multiple]):hover::picker-icon {
     background-color: #57534e;
   }
-  .dark .campos-padrao select:not([multiple]):hover::picker-icon {
+  .dark select:not([multiple]):hover::picker-icon {
     background-color: #d6d3d1;
   }
-  .campos-padrao select:not([multiple]):open::picker-icon {
+  select:not([multiple]):open::picker-icon {
     rotate: 180deg;
   }
   /* Lista aberta: o foco vai para as opções, mas o campo continua com a moldura do foco */
-  .campos-padrao select:not([multiple]):open {
+  select:not([multiple]):open {
     border-top-color: var(--campo-cor) !important;
     border-right-color: var(--campo-cor) !important;
     border-bottom-color: var(--campo-cor) !important;
     box-shadow: inset 0 1px 0 var(--campo-cor), inset -1px 0 0 var(--campo-cor), inset 0 -1px 0 var(--campo-cor) !important;
     background-image: linear-gradient(rgba(0, 0, 0, 0.06), rgba(0, 0, 0, 0.06)) !important;
   }
-  .campos-padrao select:not([multiple]) option:hover,
-  .campos-padrao select:not([multiple]) option:focus-visible {
+  select:not([multiple]) option:hover,
+  select:not([multiple]) option:focus-visible {
     background: #eff6ff;
     outline: none;
   }
-  .campos-padrao select:not([multiple]) option:checked {
+  select:not([multiple]) option:checked {
     background: #2563eb;
     color: #fff;
   }
-  .dark .campos-padrao select:not([multiple]) option:hover,
-  .dark .campos-padrao select:not([multiple]) option:focus-visible {
+  .dark select:not([multiple]) option:hover,
+  .dark select:not([multiple]) option:focus-visible {
     background: rgba(23, 37, 84, 0.6);
   }
 }

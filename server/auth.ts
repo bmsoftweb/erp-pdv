@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { getIronSession } from 'iron-session';
 import { abrirSessao, autenticar, ErroAcesso } from './acessoErp.js';
+import { conferirCaixa, SEM_REGISTRO } from './caixas.js';
 import { sessionOptions, SessionData } from './session.js';
 
 /**
@@ -35,13 +36,14 @@ export function createAuthRouter() {
       const i = credencial.indexOf(':');
       if (i < 1) throw new ErroAcesso(400, 'Acesso inválido: abra o módulo pelo Master.');
       const { u, filiais } = await autenticar(credencial.slice(0, i).trim(), credencial.slice(i + 1));
-      // A empresa pedida pelo Master (a principal do usuário) quando liberada; senão, a primeira liberada
-      const pedida = Number(q.get('e'));
-      const f = filiais.find((x) => q.get('e') !== null && Number(x.id) === pedida) ?? filiais[0];
-      await abrirSessao(req, res, u, f);
+      // Só entra pelo computador registrado num caixa, na filial do caixa (o "e" do Master não vale aqui)
+      const { filial, caixa } = await conferirCaixa(req, res, u, filiais);
+      await abrirSessao(req, res, u, filial, caixa);
       // master=1: ao Sair, fecha a aba do Master (lib/origemMaster.ts)
       return res.redirect(302, '/?master=1');
     } catch (err: any) {
+      // Computador sem registro válido: abre a tela de login do PDV, que pede o token do caixa
+      if (err instanceof ErroAcesso && err.status === SEM_REGISTRO) return res.redirect(302, '/?master=1');
       const mensagem = err instanceof ErroAcesso ? err.message : 'Erro ao entrar no PDV. Tente novamente.';
       if (!(err instanceof ErroAcesso)) console.error('Entrada pelo Master:', err);
       if (volta) {
@@ -59,14 +61,9 @@ export function createAuthRouter() {
       const senha = typeof body?.senha === 'string' ? body.senha : '';
       const { u, filiais } = await autenticar(login, senha);
 
-      // Mais de uma filial: a tela pergunta em qual entrar e reenvia login + senha + empresaId
-      const pedida = body?.empresaId;
-      const f = filiais.length === 1 ? filiais[0] : filiais.find((x) => pedida != null && pedida !== '' && Number(x.id) === Number(pedida));
-      if (!f) {
-        if (pedida != null && pedida !== '') return res.status(403).json({ error: 'Filial não liberada para este usuário.' });
-        return res.json({ escolherFilial: true, filiais: filiais.map((x) => ({ id: Number(x.id), nome: x.nome, grupo: x.grupo_nome || '' })) });
-      }
-      await abrirSessao(req, res, u, f);
+      // Só entra pelo computador registrado num caixa, na filial do caixa
+      const { filial, caixa } = await conferirCaixa(req, res, u, filiais);
+      await abrirSessao(req, res, u, filial, caixa);
       return res.json({ success: true });
     } catch (error: any) {
       if (error instanceof ErroAcesso) return res.status(error.status).json({ error: error.message });
@@ -88,7 +85,7 @@ export function createAuthRouter() {
   router.get('/user', async (req: Request, res: Response) => {
     try {
       const session = await getIronSession<SessionData>(req, res, sessionOptions);
-      if (!session.isLoggedIn) return res.status(401).json({ isLoggedIn: false });
+      if (!session.isLoggedIn || session.caixaId == null) return res.status(401).json({ isLoggedIn: false });
       return res.json(session);
     } catch (error: any) {
       return res.status(500).json({ error: error.message });
@@ -102,7 +99,8 @@ export function createAuthRouter() {
 export async function exigirSessao(req: Request, res: Response, next: NextFunction) {
   try {
     const s = await getIronSession<SessionData>(req, res, sessionOptions);
-    if (!s.isLoggedIn) return void res.status(401).json({ error: 'Sessão expirada. Entre novamente.' });
+    // Sessão sem caixa (aberta antes da regra do computador registrado) também não vale
+    if (!s.isLoggedIn || s.caixaId == null) return void res.status(401).json({ error: 'Sessão expirada. Entre novamente.' });
     res.locals.sessao = s;
     next();
   } catch (e) {

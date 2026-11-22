@@ -7,6 +7,9 @@ import { fecharNoMaster } from '@/lib/origemMaster';
 import POSPage, { UsuarioPdv } from './app/page';
 import LoginPage from './app/login';
 import { Dica } from './components/Dica';
+import { TecladoVirtual } from './components/TecladoVirtual';
+import { TelaCliente } from './components/TelaCliente';
+import { ehTelaCliente } from './lib/telaCliente';
 
 const ULTIMO_USUARIO = 'pdv_ultimo_usuario';
 
@@ -44,7 +47,7 @@ function Portao() {
       if (r.status === 401) return setUsuario(null);
       if (!r.ok) throw new Error();
       const u: UsuarioPdv = await r.json();
-      const resumo = { userName: u.userName, empresaNome: u.empresaNome };
+      const resumo = { userName: u.userName, empresaNome: u.empresaNome, caixaNumero: u.caixaNumero };
       try {
         localStorage.setItem(ULTIMO_USUARIO, JSON.stringify(resumo));
       } catch {
@@ -92,9 +95,15 @@ function Portao() {
 }
 
 createRoot(document.getElementById('root')!).render(
+  ehTelaCliente() ? (
+    // Segunda janela, no monitor do cliente: só o cupom (recebe tudo da janela do operador)
+    <TelaCliente />
+  ) : (
   <React.StrictMode>
     <Portao />
     <Toaster richColors position="top-center" />
     <Dica />
-  </React.StrictMode>,
+    <TecladoVirtual />
+  </React.StrictMode>
+  ),
 );

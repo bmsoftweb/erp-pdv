@@ -11,6 +11,7 @@ const grupoTrib = { grupo_trib_id: 1, grupo_descricao: 'Revenda', grupo_ativo: 1
       { id: 1, sku: 'A', nome: 'Arroz', ncm: '10063021', codigo_barras: '7891234567895', unidade: 'UN', preco_venda: '10.00', iat: 'A', ...grupoTrib },
       { id: 2, sku: 'B', nome: 'Bala', ncm: '17049020', codigo_barras: null, unidade: 'UN', preco_venda: '3.333', iat: 'T', ...grupoTrib },
     ]];
+  if (sql.includes('FROM cad_pessoas')) return [[]];
   if (sql.includes('FROM cad_intermediadores')) return [[{ id: 5, tipo: 'P', nome_fantasia: 'LOJA', cnpj: '08511951000137' }, { id: 6, tipo: 'P', nome_fantasia: 'REDE', cnpj: '01425787000104' }]];
   throw new Error('consulta inesperada: ' + sql.slice(0, 60));
 };
@@ -44,8 +45,21 @@ assert.deepEqual((s.documento as any).itens.map((i: any) => [i.valorUnitario, i.
 // Cartão: grupo card com o CNPJ do intermediador; troco sem dinheiro é recusado
 const c = await montarDocumento({ ...venda, ajusteTotal: 0, pagamentos: [{ tPag: '03', valor: 39.99, intermediadorId: 6, bandeira: '2', autorizacao: 'X1' }] } as any, emit, 0, 1);
 assert.deepEqual((c.documento as any).pagamentos[0].cartao, { integracao: 2, cnpj: '01425787000104', bandeira: '02', autorizacao: 'X1' });
+// TEF: o CNPJ da credenciadora que o SiTEF devolveu vale no lugar do CNPJ do intermediador
+const t = await montarDocumento({ ...venda, ajusteTotal: 0, pagamentos: [{ tPag: '04', valor: 39.99, intermediadorId: 6, integracao: 1, cnpjCredenciadora: '16501555000157', bandeira: '1', autorizacao: 'A9' }] } as any, emit, 0, 1);
+assert.deepEqual((t.documento as any).pagamentos[0].cartao, { integracao: 1, cnpj: '16501555000157', bandeira: '01', autorizacao: 'A9' });
+// PIX cobrado no banco (BMBancos): integrado, CNPJ do Banco do Brasil e o endToEndId como autorização, sem bandeira
+const px = await montarDocumento({ ...venda, ajusteTotal: 0, pagamentos: [{ tPag: '17', valor: 39.99, intermediadorId: 6, integracao: 1, cnpjCredenciadora: '00000000000191', autorizacao: 'E00000000202611201200abcdef12345' }] } as any, emit, 0, 1);
+assert.deepEqual((px.documento as any).pagamentos[0].cartao, { integracao: 1, cnpj: '00000000000191', autorizacao: 'E00000000202611201200abcdef12345' });
 await assert.rejects(montarDocumento({ ...venda, ajusteTotal: 0, pagamentos: [{ tPag: '03', valor: 50, intermediadorId: 6 }] } as any, emit, 0, 1), /Troco só em pagamento com dinheiro/);
 await assert.rejects(montarDocumento({ ...venda, pagamentos: [{ tPag: '01', valor: 50, intermediadorId: 0 }] } as any, emit, 0, 1), /intermediador/);
+
+// R$ 200.000,00 (20.000 × 10,00) ou mais: NF-e (Anexo 11 art. 96 § 7º), com o cliente identificado e cadastrado
+const grande = { ...venda, itens: [{ produtoId: 1, quantidade: 20000, valorUnitario: 10 }], ajusteTotal: 0, pagamentos: [{ tPag: '01', valor: 200000, intermediadorId: 5 }] };
+await assert.rejects(montarDocumento({ ...grande, consumidor: {} } as any, emit, 0, 1), /a partir de R\$ 200\.000,00 sai em NF-e/);
+await assert.rejects(montarDocumento(grande as any, emit, 0, 1), /CPF 52998224725 não cadastrado.*a partir de R\$ 200\.000,00/);
+// Com o desconto, 200.000,00 − 0,01 fica em NFC-e
+assert.equal((await montarDocumento({ ...grande, ajusteTotal: -0.01 } as any, emit, 0, 1)).modelo, '65');
 
 // CEST só com substituição tributária: CSOSN 500 (Simples) e CST 60 (normal) exigem; CSOSN 102 não
 assert.equal(comST({ csosn: '500' }, true), true);

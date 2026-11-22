@@ -10,6 +10,9 @@ export interface SessionData {
   grupoId?: number;
   grupoNome?: string;
   perfil?: string;
+  /** Caixa deste computador (pdv_caixas), quando registrado */
+  caixaId?: number;
+  caixaNumero?: number;
   isLoggedIn: boolean;
 }
 
@@ -28,4 +31,21 @@ export const sessionOptions: SessionOptions = {
     httpOnly: true,
     path: '/',
   },
+};
+
+/** Caixa (pdv_caixas) em que este computador foi registrado com o token */
+export interface TerminalData {
+  caixaId?: number;
+  token?: string;
+}
+
+/**
+ * Cookie do registro: lacrado com o mesmo segredo (o navegador não consegue forjar nem editar) e sem validade no lacre.
+ * O navegador limita o cookie a ~400 dias; cada login renova. Limpar os dados do site no navegador apaga o registro.
+ */
+export const terminalOptions: SessionOptions = {
+  password: secret,
+  cookieName: 'bm_pdv_terminal',
+  ttl: 0,
+  cookieOptions: sessionOptions.cookieOptions,
 };

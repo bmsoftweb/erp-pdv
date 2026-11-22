@@ -4,7 +4,10 @@ import { pool } from './db.js';
 import { empresaDa, grupoDa } from './auth.js';
 import type { SessionData } from './session.js';
 import { dataHoraSql } from '../lib/dataHora.js';
-import { centavos, cnpjValido, cpfValido, digitos, MEIOS_PAGAMENTO, modeloDoDocumento, PAF, ratear, totalDoItem } from '../lib/fiscal.js';
+import { centavos, cnpjValido, cpfValido, digitos, ESTORNO_NFCE, gtinPublico, limiteCancelamento, MEIOS_PAGAMENTO, modeloDoDocumento, PAF, ratear, totalDoItem } from '../lib/fiscal.js';
+
+/** Momento da Autorização de Uso (dhRecbto do protocolo, com fuso): conta o prazo de cancelamento */
+const AUTORIZACAO = "SUBSTRING(REGEXP_SUBSTR(xml_protocolo, '<dhRecbto>[^<]+'), 11) AS autorizacao";
 
 /**
  * Emissão do cupom pelo concentrador do erp-nfe (POST /api/emitir), como o erp-vendas faz:
@@ -34,15 +37,15 @@ export const rota = (fn: (req: Request, res: Response, s: SessionData) => Promis
     } catch (e: any) {
       if (e?.code === 'ER_NO_SUCH_TABLE' || e?.code === 'ER_BAD_FIELD_ERROR') {
         console.error(e);
-        return void res.status(500).json({ error: `Falta preparar o banco para o PAF-NFC-e: rode o extras/2026-11-20_paf_nfce.sql (${e.sqlMessage}).` });
+        return void res.status(500).json({ error: `Falta preparar o banco: rode os SQLs da pasta extras (${e.sqlMessage}).` });
       }
       if (!(e instanceof ErroHttp)) console.error(e);
       res.status(e instanceof ErroHttp ? e.status : 500).json({ error: e?.message || String(e) });
     }
   };
 
-/** Mesmo formato do criarToken do erp-nfe: base64url({uid, emp, exp}).assinatura */
-function tokenPara(segredo: string, uid: number, emp: number) {
+/** Mesmo formato do criarToken do erp-nfe (e do BMBancos): base64url({uid, emp, exp}).assinatura */
+export function tokenPara(segredo: string, uid: number, emp: number) {
   const corpo = Buffer.from(JSON.stringify({ uid, emp, exp: Date.now() + 5 * 60_000 })).toString('base64url');
   return `${corpo}.${crypto.createHmac('sha256', segredo).update(corpo).digest('base64url')}`;
 }
@@ -117,7 +120,11 @@ async function serieAtiva(emitente: number, modelo: string): Promise<number> {
 }
 
 interface ItemVenda { produtoId: number; quantidade: number; valorUnitario: number; valorTotal?: number }
-interface PagamentoVenda { tPag: string; valor: number; intermediadorId: number; cnpjPagamento?: string; ufPagamento?: string; bandeira?: string; autorizacao?: string; integracao?: number }
+interface PagamentoVenda {
+  tPag: string; valor: number; intermediadorId: number; cnpjPagamento?: string; ufPagamento?: string; bandeira?: string; autorizacao?: string; integracao?: number;
+  /** TEF (integracao 1): CNPJ da credenciadora devolvido pelo SiTEF (campo 950), vale no lugar do CNPJ do intermediador */
+  cnpjCredenciadora?: string;
+}
 interface Venda {
   idApp: string;
   itens: ItemVenda[];
@@ -134,25 +141,6 @@ interface Venda {
 export async function montarDocumento(v: Venda, emit: any, grupo: number, empresa: number) {
   if (!Array.isArray(v.itens) || !v.itens.length) falha('A venda não tem itens.');
   if (!Array.isArray(v.pagamentos) || !v.pagamentos.length) falha('Informe o pagamento.');
-
-  // ----- adquirente e modelo (Requisito IV) -----
-  const doc = digitos(v.consumidor?.documento);
-  if (doc && !(doc.length === 11 ? cpfValido(doc) : doc.length === 14 && cnpjValido(doc))) falha('CPF/CNPJ do consumidor inválido.');
-  const modelo = modeloDoDocumento(doc, v.consumidor?.ieProdutor);
-  let cliente: any = null;
-  if (modelo === '55') {
-    [[cliente]] = await pool.query(
-      'SELECT * FROM cad_pessoas WHERE cpf_cnpj = ? AND grupo_id = ? AND ativo = 1 AND date_delete IS NULL LIMIT 1',
-      [doc, grupo],
-    ) as any;
-    if (!cliente) falha(`${doc.length === 14 ? 'CNPJ' : 'CPF'} ${doc} não cadastrado no ERP. A venda para ${doc.length === 14 ? 'empresa' : 'produtor primário'} sai em NF-e, que exige o cadastro do cliente com endereço.`);
-    if (digitos(cliente.cidade_ibge).length !== 7) falha('Cliente sem município (código IBGE) no endereço. Complete o cadastro.');
-  }
-  const nfce = modelo === '65';
-  const simples = [1, 2, 4].includes(Number(emit.crt));
-  const ieDest = String(v.consumidor?.ieProdutor || cliente?.ie || '').trim();
-  const indIEDest = nfce ? 9 : ieDest ? (/ISENTO/i.test(ieDest) ? 2 : 1) : 9;
-  const interestadual = !nfce && String(cliente.cidade_uf || '').toUpperCase() !== String(emit.uf).toUpperCase();
 
   // ----- itens (Requisitos VII e VIII) -----
   const ids = [...new Set(v.itens.map((i) => Number(i.produtoId)))];
@@ -186,6 +174,28 @@ export async function montarDocumento(v: Venda, emit: any, grupo: number, empres
 
   // Ajuste no total da venda, rateado pelos itens
   const ajustes = ratear(Number(v.ajusteTotal) || 0, linhas.map((l) => l.liquido));
+
+  // ----- adquirente e modelo (Requisito IV; total ≥ R$ 200.000,00 só em NF-e, Anexo 11 art. 96 § 7º) -----
+  const doc = digitos(v.consumidor?.documento);
+  if (doc && !(doc.length === 11 ? cpfValido(doc) : doc.length === 14 && cnpjValido(doc))) falha('CPF/CNPJ do consumidor inválido.');
+  const totalVenda = centavos(linhas.reduce((s, l, k) => s + l.liquido + ajustes[k], 0));
+  const modelo = modeloDoDocumento(doc, v.consumidor?.ieProdutor, totalVenda);
+  const motivo55 = doc.length === 14 ? 'para empresa' : digitos(v.consumidor?.ieProdutor) ? 'para produtor primário' : 'a partir de R$ 200.000,00';
+  let cliente: any = null;
+  if (modelo === '55') {
+    if (!doc) falha('Venda a partir de R$ 200.000,00 sai em NF-e: informe o CPF/CNPJ do cliente.');
+    [[cliente]] = await pool.query(
+      'SELECT * FROM cad_pessoas WHERE cpf_cnpj = ? AND grupo_id = ? AND ativo = 1 AND date_delete IS NULL LIMIT 1',
+      [doc, grupo],
+    ) as any;
+    if (!cliente) falha(`${doc.length === 14 ? 'CNPJ' : 'CPF'} ${doc} não cadastrado no ERP. A venda ${motivo55} sai em NF-e, que exige o cadastro do cliente com endereço.`);
+    if (digitos(cliente.cidade_ibge).length !== 7) falha('Cliente sem município (código IBGE) no endereço. Complete o cadastro.');
+  }
+  const nfce = modelo === '65';
+  const simples = [1, 2, 4].includes(Number(emit.crt));
+  const ieDest = String(v.consumidor?.ieProdutor || cliente?.ie || '').trim();
+  const indIEDest = nfce ? 9 : ieDest ? (/ISENTO/i.test(ieDest) ? 2 : 1) : 9;
+  const interestadual = !nfce && String(cliente.cidade_uf || '').toUpperCase() !== String(emit.uf).toUpperCase();
   const itens = linhas.map(({ p, q, referencia, bruto, liquido, rot }, k) => {
     const final = centavos(liquido + ajustes[k]);
     if (final <= 0) falha(`${rot} (${p.nome}): o desconto zera o item.`);
@@ -194,11 +204,11 @@ export async function montarDocumento(v: Venda, emit: any, grupo: number, empres
     if (comST(p, simples) && digitos(p.cest).length !== 7) falha(`${rot} (${p.nome}): produto com substituição tributária sem CEST. Preencha nos dados fiscais do produto (erp-estoque).`);
     const cfop = interestadual ? p.cfop_fora_uf : p.cfop_dentro_uf;
     if (!cfop) falha(`${rot} (${p.nome}): o grupo tributário não tem CFOP ${interestadual ? 'interestadual' : 'estadual'}.`);
-    const gtin = digitos(p.codigo_barras);
+    const gtin = gtinPublico(p.codigo_barras); // código interno: SEM GTIN
     const diferenca = centavos(final - bruto);
     return {
       codigo: p.sku || String(p.id),
-      ...([8, 12, 13, 14].includes(gtin.length) && { ean: gtin }),
+      ...(gtin && { ean: gtin }),
       descricao: p.nome,
       ncm: digitos(p.ncm),
       ...(p.cest && { cest: digitos(p.cest) }),
@@ -234,6 +244,8 @@ export async function montarDocumento(v: Venda, emit: any, grupo: number, empres
     const i = inter.get(Number(pg.intermediadorId));
     if (!i) falha(`Pagamento ${n + 1} (${meio.nome}): informe o intermediador do pagamento (Requisito XI).`);
     const cnpjPag = digitos(pg.cnpjPagamento);
+    const cnpjTef = Number(pg.integracao) === 1 ? digitos(pg.cnpjCredenciadora) : '';
+    const cnpjCartao = cnpjTef.length === 14 ? cnpjTef : digitos(i.cnpj);
     if (cnpjPag && (!cnpjValido(cnpjPag) || !/^[A-Z]{2}$/i.test(pg.ufPagamento || ''))) falha(`Pagamento ${n + 1}: CNPJ transacional ou UF inválidos.`);
     return {
       forma: meio.codigo,
@@ -244,7 +256,7 @@ export async function montarDocumento(v: Venda, emit: any, grupo: number, empres
       ...(meio.cartao && {
         cartao: {
           integracao: Number(pg.integracao) === 1 ? 1 : 2,
-          ...(digitos(i.cnpj).length === 14 && { cnpj: digitos(i.cnpj) }),
+          ...(cnpjCartao.length === 14 && { cnpj: cnpjCartao }),
           ...(pg.bandeira && { bandeira: String(pg.bandeira).padStart(2, '0') }),
           ...(pg.autorizacao && { autorizacao: String(pg.autorizacao) }),
         },
@@ -367,11 +379,45 @@ export function createNotasRouter() {
     const emit = await emitenteDe(uid, empresa);
     const chave = digitos(req.body?.chave);
     if (chave.length !== 44) falha('Chave inválida.');
-    const resp = await postar(emit.id, uid, '/api/danfe', { chave });
+    const resp = await postar(emit.id, uid, '/api/danfe', { chave, rodape: { operador: s.userName, caixa: s.caixaNumero, versao: `${PAF.nome} ${PAF.versao}` } });
     if (!resp.ok) falha(mensagemDe(await resp.json().catch(() => ({})), resp.status));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="DANFE-${chave}.pdf"`);
     res.send(Buffer.from(await resp.arrayBuffer()));
+  }));
+
+  /** XML da nota autorizada para o cliente, quando ele pedir (RICMS/SC Anexo 11, art. 103, § 5º) */
+  const autorizadaDoPdv = async (emitente: number, chave: string) => {
+    if (chave.length !== 44) falha('Chave inválida.');
+    const [[d]]: any = await pool.query(
+      "SELECT modelo, situacao, COALESCE(xml_protocolo, xml) AS xml FROM nfe_documentos WHERE empresa_id = ? AND chave = ? AND referencia LIKE 'PDV-%' LIMIT 1",
+      [emitente, chave],
+    );
+    if (!d) falha('Nota não encontrada.', 404);
+    if (d.situacao !== 'autorizada') falha('Só a nota autorizada vai para o cliente: a de contingência espera a autorização da SEFAZ.');
+    return d;
+  };
+
+  r.post('/nfce/xml', rota(async (req, res, s) => {
+    const emit = await emitenteDe(Number(s.userId), empresaDa(res));
+    const chave = digitos(req.body?.chave);
+    const d = await autorizadaDoPdv(emit.id, chave);
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${chave}-${d.modelo === '65' ? 'nfce' : 'nfe'}.xml"`);
+    res.send(d.xml);
+  }));
+
+  /** XML e DANFE por e-mail ao cliente, pelo SMTP configurado no erp-nfe */
+  r.post('/nfce/email', rota(async (req, res, s) => {
+    const uid = Number(s.userId);
+    const emit = await emitenteDe(uid, empresaDa(res));
+    const chave = digitos(req.body?.chave);
+    const para = String(req.body?.email || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(para)) falha('E-mail inválido.');
+    await autorizadaDoPdv(emit.id, chave);
+    const { status, dados } = await chamar(emit.id, uid, '/api/email', { chave, para });
+    if (status >= 400 || !dados?.success) falha(mensagemDe(dados, status));
+    return { success: true };
   }));
 
   /** Cancelamento (110111). Em contingência não autorizada o erp-nfe recusa (Requisito III, III) */
@@ -383,12 +429,14 @@ export function createNotasRouter() {
     const justificativa = String(req.body?.justificativa || '').trim();
     if (justificativa.length < 15) falha('A justificativa do cancelamento precisa ter ao menos 15 caracteres.');
     const [[d]]: any = await pool.query(
-      "SELECT situacao, protocolo, referencia FROM nfe_documentos WHERE empresa_id = ? AND chave = ? AND referencia LIKE 'PDV-%' LIMIT 1",
+      `SELECT situacao, protocolo, referencia, modelo, ${AUTORIZACAO} FROM nfe_documentos WHERE empresa_id = ? AND chave = ? AND referencia LIKE 'PDV-%' LIMIT 1`,
       [emit.id, chave],
     );
     if (!d) falha('Nota não encontrada.', 404);
     if (d.situacao === 'contingencia') falha('Esta NFC-e foi emitida em contingência e ainda não foi autorizada. O cancelamento só é possível depois da autorização.');
     if (d.situacao !== 'autorizada') falha(`Nota ${d.situacao}: só nota autorizada pode ser cancelada.`);
+    const limite = limiteCancelamento(d.modelo, d.autorizacao);
+    if (limite != null && Date.now() > limite) falha(ESTORNO_NFCE);
     const { status, dados } = await chamar(emit.id, uid, '/api/evento', { chave, tipoEvento: '110111', protocolo: d.protocolo, justificativa });
     if (status >= 400 || !dados?.sucesso) falha(mensagemDe({ error: dados?.error || `${dados?.cStat ?? ''} - ${dados?.xMotivo ?? 'Cancelamento recusado'}` }, status));
     await pool.query("UPDATE mov_nfce SET cancelado = 'S', date_update = ? WHERE id_app = ? AND empresa_id = ?", [dataHoraSql(), String(d.referencia).slice(4), empresa]);
@@ -482,7 +530,7 @@ export function createNotasRouter() {
     const emit = await emitenteDe(Number(s.userId), empresaDa(res));
     const [linhas] = await pool.query(
       `SELECT chave, modelo, serie, numero, situacao, DATE_FORMAT(data_emissao, '%Y-%m-%d %H:%i:%s') AS data_emissao,
-              valor_total, destinatario_documento, codigo_status, motivo, referencia
+              valor_total, destinatario_documento, codigo_status, motivo, referencia, ${AUTORIZACAO}
          FROM nfe_documentos
         WHERE empresa_id = ? AND referencia LIKE 'PDV-%'
         ORDER BY id DESC LIMIT ?`,

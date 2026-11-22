@@ -25,7 +25,7 @@ function senhaConfere(digitada: string, gravada: string): boolean {
 }
 
 const SQL_USUARIO = `
-  SELECT u.id, u.login, u.senha_hash, u.empresa_id,
+  SELECT u.id, u.login, COALESCE(NULLIF(TRIM(u.nome), ''), u.login) AS nome, u.senha_hash, u.empresa_id,
          (SELECT p.nome FROM sys_perfis p WHERE p.id = u.perfil_id) AS perfil
     FROM sys_usuarios u
    WHERE u.ativo = 1 AND LOWER(TRIM(u.login)) = ? LIMIT 1`;
@@ -81,17 +81,19 @@ export async function autenticar(login: string, senha: string): Promise<{ u: any
   return { u, filiais };
 }
 
-/** Abre a sessão do PDV na filial escolhida */
-export async function abrirSessao(req: Request, res: Response, u: any, f: Filial) {
+/** Abre a sessão do PDV na filial escolhida (e no caixa deste computador, quando registrado) */
+export async function abrirSessao(req: Request, res: Response, u: any, f: Filial, caixa?: { id: number; numero: number } | null) {
   await pool.query('UPDATE sys_usuarios SET ultimo_acesso = NOW() WHERE id = ?', [u.id]).catch(() => {});
   const session = await getIronSession<SessionData>(req, res, sessionOptions);
   session.userId = Number(u.id);
-  session.userName = String(u.login);
+  session.userName = String(u.nome || u.login);
   session.empresaId = Number(f.id);
   session.empresaNome = f.nome || `Empresa ${f.id}`;
   session.grupoId = Number(f.grupo_id);
   session.grupoNome = f.grupo_nome || `Grupo ${f.grupo_id}`;
   session.perfil = u.perfil || '';
+  session.caixaId = caixa ? Number(caixa.id) : undefined;
+  session.caixaNumero = caixa ? Number(caixa.numero) : undefined;
   session.isLoggedIn = true;
   await session.save();
   return session;

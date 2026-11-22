@@ -38,10 +38,10 @@ export function EditarItem({ nome, quantidade, precoTabela, iat, valorTotal, onS
         </>
       }
     >
-      <div className="space-y-4" onKeyDown={(e) => e.key === 'Enter' && t > 0 && salvar()}>
+      <div className="space-y-4">
         <div className="text-sm">
-          <p className="font-bold text-gray-800">{nome}</p>
-          <p className="text-gray-500">
+          <p className="font-bold text-stone-800">{nome}</p>
+          <p className="text-stone-500">
             {quantidade.toLocaleString('pt-BR', { maximumFractionDigits: 3 })} × {brl(precoTabela)} = {brl(bruto)}
           </p>
         </div>
@@ -73,7 +73,7 @@ export function EditarItem({ nome, quantidade, precoTabela, iat, valorTotal, onS
             />
           </div>
         </div>
-        <p className={`text-sm font-semibold ${diferenca < 0 ? 'text-rose-600' : diferenca > 0 ? 'text-blue-700' : 'text-gray-400'}`}>
+        <p className={`text-sm font-semibold ${diferenca < 0 ? 'text-rose-600' : diferenca > 0 ? 'text-blue-700' : 'text-stone-400'}`}>
           {diferenca < 0 ? `Desconto de ${brl(-diferenca)}` : diferenca > 0 ? `Acréscimo de ${brl(diferenca)}` : 'Sem desconto nem acréscimo'}
         </p>
       </div>

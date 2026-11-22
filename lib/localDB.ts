@@ -7,7 +7,15 @@ export interface LocalProduct {
   preco_venda: number | string;
   /** Arredondamento (A) ou truncamento (T) do total do item */
   iat?: string | null;
+  categoria_id?: number | null;
+  /** URL da foto principal (pesquisa por categoria, código 77) */
+  foto?: string | null;
+  /** Sigla da unidade (KG = pesado na balança do caixa) */
+  unidade?: string | null;
 }
+
+/** Produto vendido por peso: pede o peso à balança (ou digitado) */
+export const porKg = (p: LocalProduct | null | undefined) => p?.unidade?.toUpperCase() === 'KG';
 
 /** Base local do PDV no IndexedDB: cópia dos produtos do servidor (a venda só fecha online) */
 class BaseLocal extends Dexie {

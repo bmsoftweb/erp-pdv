@@ -23,6 +23,8 @@ interface NumberFieldProps {
   disabled?: boolean;
   placeholder?: string;
   className?: string;
+  /** Acesso ao input (foco/seleção feitos por quem usa o campo) */
+  inputRef?: React.MutableRefObject<HTMLInputElement | null>;
 }
 
 /**
@@ -44,8 +46,9 @@ export const NumberField: React.FC<NumberFieldProps> = ({
   disabled,
   placeholder,
   className = '',
+  inputRef: refExterno,
 }) => {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const moverCursorParaFim = useRef(false);
   const atual = paraDigitos(value, scale);
 
@@ -60,7 +63,10 @@ export const NumberField: React.FC<NumberFieldProps> = ({
 
   return (
     <input
-      ref={inputRef}
+      ref={(el) => {
+        inputRef.current = el;
+        if (refExterno) refExterno.current = el;
+      }}
       id={id}
       type="text"
       inputMode={allowNegative ? 'text' : 'numeric'}

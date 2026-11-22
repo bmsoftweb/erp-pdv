@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import { useMenuTeclado, ITEM_MENU, NUMERO_MENU } from './menuTeclado';
 import { ChevronDown, ChevronUp, FileText, Menu, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
-import { Janela, BOTAO_PRIMARIO, BOTAO_SECUNDARIO } from './Janela';
+import { Janela, BOTAO, BOTAO_PRIMARIO, BOTAO_SECUNDARIO } from './Janela';
 import { DateField } from './DateField';
 import { INPUT_CLASS, LABEL_CLASS } from './campos';
 import { baixar, erroDe } from '@/lib/arquivos';
@@ -13,9 +14,10 @@ type Funcao = 'identificacao' | 'registros' | 'xml';
  * Menu Fiscal (Requisito VI) na tela principal de vendas, sem senha.
  * Só as funções que este PAF tem: sem DAV, Requisições Externas, mesas nem combustível (§ 2º).
  */
-export function MenuFiscal() {
-  const [aberto, setAberto] = useState(false);
+export function MenuFiscal({ aberto, setAberto }: { aberto: boolean; setAberto: (v: boolean) => void }) {
   const [funcao, setFuncao] = useState<Funcao | null>(null);
+  // Aberto pelo botão ou pelo código 88: escolhe com as setas
+  const { lista, fechar, teclas } = useMenuTeclado(aberto, setAberto);
   const itens: [Funcao, string][] = [
     ['identificacao', 'Identificação do PAF-NFC-e'],
     ['registros', 'Registros do PAF-NFC-e'],
@@ -27,18 +29,18 @@ export function MenuFiscal() {
       <button
         type="button"
         onClick={() => setAberto(!aberto)}
-        className={`flex items-center gap-2 px-4 py-2 ${aberto ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white hover:bg-gray-50 text-gray-600 border-gray-200'} border font-medium text-xs rounded-xl transition-colors active:scale-95 shadow-sm cursor-pointer`}
+        className={`${BOTAO} border ${aberto ? 'bg-blue-50 text-blue-700 border-blue-200' : 'text-stone-600 border-stone-300 hover:bg-stone-100'}`}
       >
-        <Menu size={18} />
+        <Menu size={16} />
         MENU FISCAL
         {aberto ? <ChevronDown size={14} className="ml-1 opacity-70" /> : <ChevronUp size={14} className="ml-1 opacity-70" />}
       </button>
 
       {aberto && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setAberto(false)} />
-          <div className="absolute bottom-full right-0 mb-3 w-80 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden z-50 p-2 space-y-1">
-            {itens.map(([f, nome]) => (
+          <div className="fixed inset-0 z-40" onClick={fechar} />
+          <div ref={lista} role="menu" onKeyDown={teclas} className="absolute bottom-full right-0 mb-2 w-80 py-1 bg-white rounded-lg shadow-xl border border-stone-200 overflow-hidden z-50">
+            {itens.map(([f, nome], n) => (
               <button
                 key={f}
                 type="button"
@@ -46,9 +48,11 @@ export function MenuFiscal() {
                   setAberto(false);
                   setFuncao(f);
                 }}
-                className="w-full text-left flex items-start gap-3 px-4 py-3 hover:bg-gray-50 rounded-xl transition-colors text-sm font-semibold text-gray-700 cursor-pointer"
+                role="menuitem"
+                className={ITEM_MENU}
               >
-                <FileText size={18} className="text-blue-600 shrink-0 mt-0.5" />
+                <span className={NUMERO_MENU}>{n + 1}</span>
+                <FileText size={16} className="text-blue-600 shrink-0" />
                 <span>{nome}</span>
               </button>
             ))}
@@ -65,9 +69,9 @@ export function MenuFiscal() {
 
 function Linha({ rotulo, valor }: { rotulo: string; valor: React.ReactNode }) {
   return (
-    <div className="flex justify-between gap-4 py-1.5 border-b border-gray-50 text-sm">
-      <span className="text-gray-500">{rotulo}</span>
-      <span className="font-semibold text-gray-800 text-right">{valor || '—'}</span>
+    <div className="flex justify-between gap-4 py-1.5 border-b border-stone-50 text-sm">
+      <span className="text-stone-500">{rotulo}</span>
+      <span className="font-semibold text-stone-800 text-right">{valor || '—'}</span>
     </div>
   );
 }
@@ -84,7 +88,7 @@ function Identificacao({ onFechar }: { onFechar: () => void }) {
   return (
     <Janela titulo="Identificação do PAF-NFC-e" onFechar={onFechar} rodape={<button type="button" className={BOTAO_SECUNDARIO} onClick={onFechar}>Fechar</button>}>
       {!d ? (
-        <p className="text-sm text-gray-500 flex items-center gap-2"><RefreshCw size={14} className="animate-spin" /> Carregando…</p>
+        <p className="text-sm text-stone-500 flex items-center gap-2"><RefreshCw size={14} className="animate-spin" /> Carregando…</p>
       ) : (
         <div className="space-y-5">
           <section>
@@ -125,7 +129,7 @@ function Periodo({ inicio, fim, onInicio, onFim }: { inicio: string; fim: string
           <DateField value={fim} onChange={onFim} />
         </div>
       </div>
-      <p className="text-[11px] text-gray-400 mt-1">Sem datas, considera todo o período do banco de dados.</p>
+      <p className="text-[11px] text-stone-400 mt-1">Sem datas, considera todo o período do banco de dados.</p>
     </div>
   );
 }
@@ -175,7 +179,7 @@ function Registros({ onFechar }: { onFechar: () => void }) {
             <option value="total">ESTOQUE TOTAL</option>
             <option value="parcial">ESTOQUE PARCIAL</option>
           </select>
-          <p className="text-[11px] text-gray-400 mt-1">Posição na abertura do dia (antes do primeiro documento fiscal da data).</p>
+          <p className="text-[11px] text-stone-400 mt-1">Posição na abertura do dia (antes do primeiro documento fiscal da data).</p>
         </div>
         {estoque === 'parcial' && (
           <div>
@@ -214,7 +218,7 @@ function ExportarXml({ onFechar }: { onFechar: () => void }) {
             <option value="65">NFC-e</option>
             <option value="55">NF-e</option>
           </select>
-          <p className="text-[11px] text-gray-400 mt-1">Inclui as emitidas em contingência.</p>
+          <p className="text-[11px] text-stone-400 mt-1">Inclui as emitidas em contingência.</p>
         </div>
       </div>
     </Janela>
@@ -223,5 +227,5 @@ function ExportarXml({ onFechar }: { onFechar: () => void }) {
 
 /** Aviso exigido nas telas sem o Menu Fiscal (Requisito VI, § 1º) */
 export const MenuFiscalInacessivel = () => (
-  <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">MENU FISCAL INACESSÍVEL NESTA TELA</span>
+  <span className="text-[10px] font-black text-stone-400 uppercase tracking-widest">MENU FISCAL INACESSÍVEL NESTA TELA</span>
 );

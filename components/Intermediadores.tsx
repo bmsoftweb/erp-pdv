@@ -107,27 +107,27 @@ export function Intermediadores({ onFechar }: { onFechar: () => void }) {
         </>
       }
     >
-      <table className="w-full text-sm border border-gray-200">
-        <thead className="bg-gray-50 text-xs text-gray-500">
+      <table className="w-full text-sm border border-stone-200">
+        <thead className="bg-stone-50 text-xs text-stone-500">
           <tr>
-            <th className="border border-gray-200 px-2 py-1.5 text-left">Código</th>
-            <th className="border border-gray-200 px-2 py-1.5 text-left">Tipo</th>
-            <th className="border border-gray-200 px-2 py-1.5 text-left">Nome fantasia</th>
-            <th className="border border-gray-200 px-2 py-1.5 text-left">CNPJ</th>
-            <th className="border border-gray-200 px-2 py-1.5 text-left">Identificação</th>
-            <th className="border border-gray-200 px-2 py-1.5 w-[40px]">Ações</th>
+            <th className="border border-stone-200 px-2 py-1.5 text-left">Código</th>
+            <th className="border border-stone-200 px-2 py-1.5 text-left">Tipo</th>
+            <th className="border border-stone-200 px-2 py-1.5 text-left">Nome fantasia</th>
+            <th className="border border-stone-200 px-2 py-1.5 text-left">CNPJ</th>
+            <th className="border border-stone-200 px-2 py-1.5 text-left">Identificação</th>
+            <th className="border border-stone-200 px-2 py-1.5 w-[40px]">Ações</th>
           </tr>
         </thead>
         <tbody>
           {lista.map((i) => (
-            <tr key={i.id} className={i.ativo ? '' : 'text-gray-400'}>
-              <td className="border border-gray-200 px-2 py-1.5 font-mono">{i.codigo}</td>
-              <td className="border border-gray-200 px-2 py-1.5">{i.tipo === 'P' ? 'Pagamento' : 'Transação'}</td>
-              <td className="border border-gray-200 px-2 py-1.5">{i.nome_fantasia}{!i.ativo && ' (inativo)'}</td>
-              <td className="border border-gray-200 px-2 py-1.5 font-mono">{formatarCnpj(i.cnpj)}</td>
-              <td className="border border-gray-200 px-2 py-1.5">{i.identificacao}</td>
-              <td className="border border-gray-200 px-2 py-1.5 text-center">
-                <button type="button" title="Editar" onClick={() => setEdicao({ ...i })} className="p-1 text-gray-500 hover:text-blue-600 cursor-pointer">
+            <tr key={i.id} className={i.ativo ? '' : 'text-stone-400'}>
+              <td className="border border-stone-200 px-2 py-1.5 font-mono">{i.codigo}</td>
+              <td className="border border-stone-200 px-2 py-1.5">{i.tipo === 'P' ? 'Pagamento' : 'Transação'}</td>
+              <td className="border border-stone-200 px-2 py-1.5">{i.nome_fantasia}{!i.ativo && ' (inativo)'}</td>
+              <td className="border border-stone-200 px-2 py-1.5 font-mono">{formatarCnpj(i.cnpj)}</td>
+              <td className="border border-stone-200 px-2 py-1.5">{i.identificacao}</td>
+              <td className="border border-stone-200 px-2 py-1.5 text-center">
+                <button type="button" title="Editar" onClick={() => setEdicao({ ...i })} className="p-1 text-stone-500 hover:text-blue-600 cursor-pointer">
                   <Pencil size={15} />
                 </button>
               </td>
@@ -135,7 +135,7 @@ export function Intermediadores({ onFechar }: { onFechar: () => void }) {
           ))}
           {!lista.length && (
             <tr>
-              <td colSpan={6} className="px-2 py-6 text-center text-gray-400">
+              <td colSpan={6} className="px-2 py-6 text-center text-stone-400">
                 Nenhum intermediador. Cadastre ao menos o da própria loja (pagamento em dinheiro) e os das maquininhas.
               </td>
             </tr>

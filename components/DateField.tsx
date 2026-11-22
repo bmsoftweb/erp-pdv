@@ -50,7 +50,7 @@ function mascaraData(texto: string): string {
   return n;
 }
 
-function isoDeHoje(): string {
+export function isoDeHoje(): string {
   const h = new Date();
   return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, '0')}-${String(h.getDate()).padStart(2, '0')}`;
 }
@@ -222,7 +222,7 @@ export const DateField: React.FC<DateFieldProps> = ({
     <div
       ref={popoverRef}
       style={{ top: pos.top, left: pos.left }}
-      className="fixed z-[100] w-[280px] bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl shadow-2xl p-3 select-none"
+      className="fixed z-[250] w-[280px] bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl shadow-2xl p-3 select-none"
     >
       {/* Navegação de mês e ano */}
       <div className="flex items-center justify-between gap-1.5 mb-2">

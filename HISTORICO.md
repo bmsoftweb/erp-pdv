@@ -2,6 +2,16 @@
 
 Mais recente primeiro. PATCH a cada envio ao GitHub; MAJOR/MINOR só quando pedido.
 
+## 0.1.6 — 2026-11-21
+
+- Caixas cadastrados no BM-Master (`pdv_caixas`): o computador se registra com o token do caixa; teclado virtual, TEF SiTEF e balança configurados por caixa (scripts `extras/2026-11-20_pdv_caixas*.sql` e `extras/2026-11-21_pdv_caixas_*.sql`).
+- TEF pelo SiTEF (CliSiTef) no lugar do SuperTEF; PIX cobrado no banco pelo BMBancos, com QR Code na tela e baixa automática (`BANCOS_URL`/`BANCOS_SECRET`).
+- Vitrine de imagens no caixa e tela do cliente em segundo monitor (`pdv_imagens`, scripts `extras/2026-11-20_pdv_imagens.sql` e `extras/2026-11-21_pdv_imagens_tela.sql`).
+- Pesquisa por categoria (código 77) com fotos dos produtos, para hortifrúti e padaria (script `extras/2026-11-21_categorias_pdv_pesquisa.sql`).
+- Balança de checkout pela porta serial/USB (Web Serial, protocolo ENQ/STX): produto por kg pede o peso, tecla `*` lê de novo; quantidade sempre com 3 casas.
+- Teclado virtual menor.
+- RICMS/SC Anexo 11: código interno ou GTIN inválido vai como "SEM GTIN" (arts. 96 VIII e 99 § 1º); venda a partir de R$ 200.000,00 sai em NF-e (art. 96 § 7º); cancelamento da NFC-e só até 30 min da autorização, depois orienta a NF-e de estorno (art. 106); XML e DANFE ao cliente por e-mail ou download em Notas emitidas (art. 103 § 5º).
+
 ## 0.1.5 — 2026-11-20
 
 - Publicação na Vercel: a API caía ao carregar o `package.json` (import de JSON sem `with { type: 'json' }`); variáveis de ambiente cadastradas no projeto.

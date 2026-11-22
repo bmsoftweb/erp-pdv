@@ -68,7 +68,7 @@ export const Dica: React.FC = () => {
       ref={caixa}
       role="tooltip"
       style={{ left: dica.x, top: dica.y, transform: `translate(-50%, ${dica.embaixo ? '8px' : 'calc(-100% - 8px)'})` }}
-      className="fixed z-[100] w-max max-w-64 pointer-events-none px-2.5 py-1.5 rounded-lg bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 shadow-lg text-[11px] leading-snug"
+      className="fixed z-[250] w-max max-w-64 pointer-events-none px-2.5 py-1.5 rounded-lg bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 shadow-lg text-[11px] leading-snug"
     >
       <div className={dica.desc ? 'font-semibold' : 'font-medium'}>{dica.titulo}</div>
       {dica.desc && <div className="text-stone-300 dark:text-stone-600 font-normal">{dica.desc}</div>}

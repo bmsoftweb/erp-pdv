@@ -1,18 +1,28 @@
-import React, { useState } from 'react';
-import { User, Lock, ArrowRight, Eye, EyeOff, ShoppingCart, Building2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { User, Lock, ArrowRight, Eye, EyeOff, ShoppingCart, Monitor, KeyRound, Keyboard } from 'lucide-react';
 import { AvisoErro } from '@/components/AvisoErro';
 import { Toggle } from '@/components/Toggle';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { avancarComEnter } from '@/components/Janela';
+import { tecladoLigado, ligarTeclado } from '@/components/TecladoVirtual';
 import { lerLembrete, salvarLembrete, limparLembrete } from '@/lib/lembrete';
 
 const LABEL = 'block text-[10px] font-bold uppercase tracking-widest ml-1 mb-1.5 text-stone-400';
 const INPUT = 'w-full bg-stone-50 p-3 text-sm font-medium text-stone-800 placeholder:text-stone-400 placeholder:font-normal transition-all';
 const ICONE = 'absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 pointer-events-none';
 
-/** Login do ERP BMsoft (mesmo do erp-vendas): usuário, senha e, com mais de uma filial, a escolha da filial */
+interface CaixaLocal {
+  numero: number;
+  descricao: string;
+  empresaNome: string;
+  login: string | null;
+}
+
+/** Login do ERP BMsoft (mesmo do erp-vendas). Só entra computador registrado num caixa: sem registro, pede o token */
 export default function LoginPage({ onEntrou }: { onEntrou: () => void }) {
   // Um lembrete salvo pré-preenche usuário e senha e já deixa a opção marcada
   const [lembrete] = useState(() => lerLembrete());
+  const [teclado, setTeclado] = useState(tecladoLigado);
   const [login, setLogin] = useState(() => lembrete?.login ?? '');
   const [password, setPassword] = useState(() => lembrete?.senha ?? '');
   const [lembrar, setLembrar] = useState(() => Boolean(lembrete));
@@ -22,23 +32,65 @@ export default function LoginPage({ onEntrou }: { onEntrou: () => void }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Usuário com mais de uma filial: a API devolve a lista e a tela pergunta em qual entrar
-  const [filiais, setFiliais] = useState<{ id: number; nome: string; grupo: string }[] | null>(null);
+  // Caixa em que este computador foi registrado (pdv_caixas): fixa a filial e, se tiver, o usuário.
+  // undefined = ainda lendo; null = sem registro válido (a tela pede o token)
+  const [caixa, setCaixa] = useState<CaixaLocal | null | undefined>(undefined);
+  const [erroCaixa, setErroCaixa] = useState('');
+  const [registrando, setRegistrando] = useState(false);
+  const [token, setToken] = useState('');
 
-  const entrar = async (empresaId?: number) => {
+  const aplicarCaixa = (c: CaixaLocal | null) => {
+    // Saindo de um caixa com usuário fixo: o campo volta ao usuário lembrado (ou vazio)
+    if (!c?.login && caixa?.login) setLogin(lembrete?.login ?? '');
+    setCaixa(c);
+    if (!c?.login) return;
+    setLogin(c.login);
+    if (lembrete?.login.toLowerCase() !== c.login.toLowerCase()) setPassword(''); // senha lembrada é de outro usuário
+    setTimeout(() => document.getElementById('input-login-senha')?.focus()); // usuário fixo: o foco vai para a senha
+  };
+  useEffect(() => {
+    fetch('/api/caixa-local')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return;
+        aplicarCaixa(d.caixa);
+        setErroCaixa(d.erro || '');
+      })
+      .catch(() => {});
+  }, []);
+
+  const registrar = async () => {
+    setIsLoading(true);
+    setError('');
+    try {
+      const r = await fetch('/api/caixa-local', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return setError(d.error || 'Não foi possível registrar o computador.');
+      aplicarCaixa(d.caixa);
+      setErroCaixa('');
+      setRegistrando(false);
+      setToken('');
+    } catch {
+      setError('Ocorreu um erro ao conectar ao servidor.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const pedirToken = registrando || caixa === null;
+
+  const entrar = async () => {
     setIsLoading(true);
     setError('');
     try {
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ login: login.trim(), senha: password, empresaId }),
+        body: JSON.stringify({ login: login.trim(), senha: password }),
       });
       const data = await res.json();
 
-      if (res.ok && data.escolherFilial) {
-        setFiliais(data.filiais);
-      } else if (res.ok) {
+      if (res.ok) {
         // Só guarda usuário e senha depois de um login válido
         if (lembrar) salvarLembrete(login.trim(), password);
         else limparLembrete();
@@ -64,7 +116,7 @@ export default function LoginPage({ onEntrou }: { onEntrou: () => void }) {
   );
 
   return (
-    <main className="campos-padrao min-h-screen flex relative bg-white text-stone-900 font-sans">
+    <main className="min-h-screen flex relative bg-white text-stone-900 font-sans">
       {/* Painel esquerdo: identidade visual (oculto em telas pequenas) */}
       <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden flex-col p-12 bg-white isolate">
         <div className="absolute inset-0 -z-10 pointer-events-none overflow-hidden">
@@ -104,36 +156,70 @@ export default function LoginPage({ onEntrou }: { onEntrou: () => void }) {
 
           {error && <AvisoErro mensagem={error} onFechar={() => setError('')} />}
 
-          {filiais ? (
-            <div className="flex flex-col gap-2 mt-8">
-              <span className={LABEL}>Em qual filial você vai trabalhar?</span>
-              {filiais.map((f, i) => (
-                <button
-                  key={f.id}
-                  type="button"
-                  autoFocus={i === 0}
-                  disabled={isLoading}
-                  onClick={() => entrar(f.id)}
-                  className="w-full flex items-center gap-3 text-left bg-white border border-stone-200 hover:border-indigo-400 focus:border-indigo-500 px-4 py-3 rounded-xl transition-colors cursor-pointer disabled:opacity-60"
-                >
-                  <Building2 className="w-4 h-4 text-indigo-500 shrink-0" />
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-sm font-bold text-stone-800 truncate">{f.nome}</span>
-                    {f.grupo && <span className="block text-[11px] text-stone-500 truncate">{f.grupo}</span>}
-                  </span>
-                  <ArrowRight className="w-4 h-4 text-stone-400 shrink-0" />
+          {/* Caixa deste computador: fixa a filial (e o usuário, quando o caixa tem um) */}
+          {caixa !== undefined && !registrando && (
+            <div className="mt-6 flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-2.5">
+              <Monitor className={`w-4 h-4 shrink-0 ${caixa ? 'text-blue-600' : 'text-stone-400'}`} />
+              <span className="flex-1 min-w-0 text-xs">
+                {caixa ? (
+                  <>
+                    <span className="block font-bold text-stone-800 truncate">Caixa {caixa.numero}{caixa.descricao && ` · ${caixa.descricao}`}</span>
+                    <span className="block text-stone-500 truncate">{caixa.empresaNome}{caixa.login && ` · só ${caixa.login}`}</span>
+                  </>
+                ) : (
+                  <span className="text-amber-700 font-semibold">{erroCaixa || 'Computador não registrado em nenhum caixa: só entra com o token do caixa.'}</span>
+                )}
+              </span>
+              {caixa && (
+                <button type="button" onClick={() => { setRegistrando(true); setError(''); }} className="text-xs font-bold text-blue-600 hover:text-blue-800 cursor-pointer shrink-0">
+                  Trocar
                 </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => setFiliais(null)}
-                className="self-start mt-2 text-xs font-bold text-stone-500 hover:text-stone-700 cursor-pointer"
-              >
-                ← Voltar
-              </button>
+              )}
             </div>
+          )}
+
+          {pedirToken ? (
+            <form onSubmit={(e) => { e.preventDefault(); registrar(); }} onKeyDown={(e) => avancarComEnter(e, e.currentTarget, () => {})} className="flex flex-col gap-5 mt-8">
+              <div>
+                <label htmlFor="input-login-token" className={LABEL}>Token do caixa</label>
+                <div className="relative">
+                  <KeyRound className={ICONE} />
+                  <input
+                    id="input-login-token"
+                    type="text"
+                    inputMode="numeric"
+                    required
+                    autoFocus
+                    autoComplete="off"
+                    value={token}
+                    onChange={(e) => {
+                      // Só dígitos; o traço entra sozinho depois do 4º
+                      const d = e.target.value.replace(/\D/g, '').slice(0, 8);
+                      setToken(d.length > 4 ? `${d.slice(0, 4)}-${d.slice(4)}` : d);
+                      setError('');
+                    }}
+                    onFocus={(e) => e.target.select()}
+                    className={`${INPUT} pl-11 font-mono tracking-widest`}
+                    placeholder="NNNN-NNNN"
+                  />
+                </div>
+                <p className="text-[11px] text-stone-500 mt-1.5 ml-1">
+                  O token está no BM-Master, em Empresas → Configurações → Caixas (PDV). Daqui em diante este computador só entra na filial desse caixa.
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                {caixa && (
+                  <button type="button" onClick={() => { setRegistrando(false); setError(''); }} className="px-5 py-3.5 rounded-xl text-sm font-bold text-stone-600 border border-stone-300 hover:bg-stone-100 cursor-pointer">
+                    Voltar
+                  </button>
+                )}
+                <button type="submit" disabled={isLoading} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-indigo-200 uppercase tracking-wide disabled:opacity-70 cursor-pointer">
+                  Registrar este computador
+                </button>
+              </div>
+            </form>
           ) : (
-            <form onSubmit={(e) => { e.preventDefault(); entrar(); }} className="flex flex-col gap-5 mt-8">
+            <form onSubmit={(e) => { e.preventDefault(); entrar(); }} onKeyDown={(e) => avancarComEnter(e, e.currentTarget, () => {})} className="flex flex-col gap-5 mt-8">
               <div>
                 <label htmlFor="input-login-usuario" className={LABEL}>Usuário</label>
                 <div className="relative">
@@ -142,7 +228,9 @@ export default function LoginPage({ onEntrou }: { onEntrou: () => void }) {
                     id="input-login-usuario"
                     type="text"
                     required
-                    autoFocus
+                    autoFocus={!caixa?.login}
+                    readOnly={!!caixa?.login}
+                    title={caixa?.login ? `O caixa ${caixa.numero} só aceita este usuário` : undefined}
                     autoComplete="username"
                     value={login}
                     onChange={(e) => { setLogin(e.target.value); setError(''); }}
@@ -161,6 +249,7 @@ export default function LoginPage({ onEntrou }: { onEntrou: () => void }) {
                     id="input-login-senha"
                     type={showPassword ? 'text' : 'password'}
                     required
+                    autoFocus={!!caixa?.login}
                     autoComplete="current-password"
                     value={password}
                     onChange={(e) => { setPassword(e.target.value); setError(''); }}
@@ -223,6 +312,13 @@ export default function LoginPage({ onEntrou }: { onEntrou: () => void }) {
             <span>MENU FISCAL INACESSÍVEL NESTA TELA</span>
             <span className="normal-case">© {new Date().getFullYear()}</span>
           </div>
+          <button
+            type="button"
+            onClick={() => { ligarTeclado(!teclado); setTeclado(!teclado); }}
+            className="mt-3 mx-auto flex items-center gap-1.5 text-xs font-semibold text-stone-500 hover:text-blue-600 cursor-pointer"
+          >
+            <Keyboard className="w-4 h-4" /> {teclado ? 'Desligar o teclado virtual' : 'Ligar o teclado virtual (tela touch)'}
+          </button>
         </div>
       </div>
 
