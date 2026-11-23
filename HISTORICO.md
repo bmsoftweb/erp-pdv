@@ -2,6 +2,16 @@
 
 Mais recente primeiro. PATCH a cada envio ao GitHub; MAJOR/MINOR só quando pedido.
 
+## 0.1.7 — 2026-11-23
+
+- PAF-NFC-e (Ato DIAT 54/2026 e RICMS/SC Anexo 11), adequações da auditoria:
+  - Venda: cupom conferido antes de cobrar (TEF/PIX); recusa serviço, produto inativo, grupo tributário sem CST do ICMS/IBS-CBS e cClassTrib; intermediador escolhido em todo pagamento (só tipo P); troco só de dinheiro e menor que ele; dinheiro gravado sem o troco; CPF com IE no cadastro sai em NF-e; código impresso = GTIN ou id.
+  - Contingência: DANFE em duas vias (via do estabelecimento), aviso de fila parada com o prazo do art. 104 § 1º, reimpressão da nota gerada de novo, "Gerar de novo" da contingência recusada, aviso de NF-e de estorno (art. 106), números abandonados com opção de inutilizar (art. 108), registro da venda que falha reenviado.
+  - Menu Fiscal: aviso "MENU FISCAL INACESSÍVEL NESTA TELA" em todas as telas e botão no caixa livre; Arquivo I com J1/N1 de todas as notas e J2/N2 da contingência, A2 sem troco e sem "Sem pagamento" e com as notas do erp-vendas e do erp-nfe, P2/E2 com inativos e sem CST inventado, estoque parcial por código, id ou nome, ordem por série; Arquivo III com D4 fechando e item cancelado do DAV; filtro de ambiente; data da última atualização pela `sys_paf`.
+  - EConf só com pagamento eletrônico.
+- Clube de descontos: associado com o CPF na venda leva o preço das listas do clube (script `extras/2026-11-22_clube_descontos.sql`).
+- Scripts: `extras/2026-11-23_sys_paf_versao.sql` e `extras/2026-11-23_pagamentos_sem_troco.sql` (tira o troco dos pagamentos antigos; fazer backup antes).
+
 ## 0.1.6 — 2026-11-21
 
 - Caixas cadastrados no BM-Master (`pdv_caixas`): o computador se registra com o token do caixa; teclado virtual, TEF SiTEF e balança configurados por caixa (scripts `extras/2026-11-20_pdv_caixas*.sql` e `extras/2026-11-21_pdv_caixas_*.sql`).

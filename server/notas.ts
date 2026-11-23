@@ -4,6 +4,7 @@ import { pool } from './db.js';
 import { empresaDa, grupoDa } from './auth.js';
 import type { SessionData } from './session.js';
 import { dataHoraSql } from '../lib/dataHora.js';
+import { baixarEstoque, estornarCancelados } from './estoque.js';
 import { centavos, cnpjValido, cpfValido, digitos, ESTORNO_NFCE, gtinPublico, limiteCancelamento, MEIOS_PAGAMENTO, modeloDoDocumento, PAF, ratear, totalDoItem } from '../lib/fiscal.js';
 
 /** Momento da Autorização de Uso (dhRecbto do protocolo, com fuso): conta o prazo de cancelamento */
@@ -26,6 +27,12 @@ export class ErroHttp extends Error {
 }
 export function falha(mensagem: string, status = 400): never {
   throw new ErroHttp(status, mensagem);
+}
+
+/** Versão do PAF-NFC-e: uma só para o erp-pdv e o erp-vendas (PAF único), na sys_paf (extras/2026-11-23_sys_paf_versao.sql do erp-pdv) */
+export async function versaoPaf(): Promise<string> {
+  const [[p]]: any = await pool.query('SELECT versao FROM sys_paf WHERE id = 1');
+  return p?.versao || falha('Versão do PAF-NFC-e não cadastrada (sys_paf.versao).');
 }
 
 /** Handler async com erro virando JSON { error } (o Express 4 não captura promessa rejeitada) */
@@ -94,8 +101,8 @@ async function emitenteDe(uid: number, empresa: number) {
 }
 
 /** IBS/CBS de 2026, ano de teste da LC 214/2025 (os mesmos percentuais do erp-vendas) */
-const IBS_UF = 0.1;
-const CBS = 0.9;
+const IBS_UF = 0.1; // só no CST 000 (decisão de 23/11/2026)
+const CBS = 0.9; // só no CST 000 (decisão de 23/11/2026)
 
 function icmsDoItem(i: any, simples: boolean, rot: string) {
   const grupo = `o grupo tributário "${i.grupo_descricao}"`;
@@ -137,20 +144,23 @@ interface Venda {
   intermediadorTransacaoId?: number;
 }
 
-/** Monta o documento do POST /api/emitir do erp-nfe a partir da venda e do cadastro */
-export async function montarDocumento(v: Venda, emit: any, grupo: number, empresa: number) {
+/**
+ * Monta o documento do POST /api/emitir do erp-nfe a partir da venda e do cadastro.
+ * `validar`: confere itens, cliente e cadastro sem exigir os pagamentos (o caixa pergunta antes de cobrar)
+ */
+export async function montarDocumento(v: Venda, emit: any, grupo: number, empresa: number, validar = false) {
   if (!Array.isArray(v.itens) || !v.itens.length) falha('A venda não tem itens.');
-  if (!Array.isArray(v.pagamentos) || !v.pagamentos.length) falha('Informe o pagamento.');
+  if (!Array.isArray(v.pagamentos) || (!validar && !v.pagamentos.length)) falha('Informe o pagamento.');
 
   // ----- itens (Requisitos VII e VIII) -----
   const ids = [...new Set(v.itens.map((i) => Number(i.produtoId)))];
   const [produtos]: any = await pool.query(
     `SELECT p.*, u.sigla AS unidade, g.descricao AS grupo_descricao, g.ativo AS grupo_ativo, g.origem, g.cfop_dentro_uf, g.cfop_fora_uf,
             g.csosn, g.aliquota_credito_sn, g.cst_icms, g.aliquota_icms, g.cst_pis, g.aliquota_pis, g.cst_cofins, g.aliquota_cofins,
-            g.cst_ibscbs, g.cclass_trib, g.id AS grupo_trib_id
+            g.cst_ibscbs, g.cclass_trib, g.cst_is, g.cclass_trib_is, g.aliquota_is, g.id AS grupo_trib_id
        FROM cad_produtos p
        LEFT JOIN cad_produtos_unidades_medida u ON u.id = p.unidade_id
-       LEFT JOIN fis_grupos_tributarios g ON g.id = p.grupo_tributario_id
+       LEFT JOIN fis_grupos_tributarios g ON g.id = p.grupo_tributario_id AND g.grupo_id = p.grupo_id
       WHERE p.id IN (?) AND p.grupo_id = ?`,
     [ids, grupo],
   );
@@ -179,35 +189,38 @@ export async function montarDocumento(v: Venda, emit: any, grupo: number, empres
   const doc = digitos(v.consumidor?.documento);
   if (doc && !(doc.length === 11 ? cpfValido(doc) : doc.length === 14 && cnpjValido(doc))) falha('CPF/CNPJ do consumidor inválido.');
   const totalVenda = centavos(linhas.reduce((s, l, k) => s + l.liquido + ajustes[k], 0));
-  const modelo = modeloDoDocumento(doc, v.consumidor?.ieProdutor, totalVenda);
-  const motivo55 = doc.length === 14 ? 'para empresa' : digitos(v.consumidor?.ieProdutor) ? 'para produtor primário' : 'a partir de R$ 200.000,00';
-  let cliente: any = null;
+  const [[cliente]]: any = doc
+    ? await pool.query('SELECT * FROM cad_pessoas WHERE cpf_cnpj = ? AND grupo_id = ? AND ativo = 1 AND date_delete IS NULL LIMIT 1', [doc, grupo])
+    : [[null]];
+  // CPF com IE no cadastro é produtor primário, como no modeloExigido do erp-vendas: NF-e mesmo sem a IE digitada no caixa
+  const ieProdutor = doc.length === 11 ? String(digitos(v.consumidor?.ieProdutor) ? v.consumidor!.ieProdutor : digitos(cliente?.ie) ? cliente.ie : '').trim() : '';
+  const modelo = modeloDoDocumento(doc, ieProdutor, totalVenda);
+  const motivo55 = doc.length === 14 ? 'para empresa' : ieProdutor ? 'para produtor primário' : 'a partir de R$ 200.000,00';
   if (modelo === '55') {
     if (!doc) falha('Venda a partir de R$ 200.000,00 sai em NF-e: informe o CPF/CNPJ do cliente.');
-    [[cliente]] = await pool.query(
-      'SELECT * FROM cad_pessoas WHERE cpf_cnpj = ? AND grupo_id = ? AND ativo = 1 AND date_delete IS NULL LIMIT 1',
-      [doc, grupo],
-    ) as any;
     if (!cliente) falha(`${doc.length === 14 ? 'CNPJ' : 'CPF'} ${doc} não cadastrado no ERP. A venda ${motivo55} sai em NF-e, que exige o cadastro do cliente com endereço.`);
     if (digitos(cliente.cidade_ibge).length !== 7) falha('Cliente sem município (código IBGE) no endereço. Complete o cadastro.');
   }
   const nfce = modelo === '65';
   const simples = [1, 2, 4].includes(Number(emit.crt));
-  const ieDest = String(v.consumidor?.ieProdutor || cliente?.ie || '').trim();
+  const ieDest = String(ieProdutor || cliente?.ie || '').trim();
   const indIEDest = nfce ? 9 : ieDest ? (/ISENTO/i.test(ieDest) ? 2 : 1) : 9;
   const interestadual = !nfce && String(cliente.cidade_uf || '').toUpperCase() !== String(emit.uf).toUpperCase();
   const itens = linhas.map(({ p, q, referencia, bruto, liquido, rot }, k) => {
     const final = centavos(liquido + ajustes[k]);
     if (final <= 0) falha(`${rot} (${p.nome}): o desconto zera o item.`);
+    if (!Number(p.ativo)) falha(`${rot} (${p.nome}): produto inativo no cadastro (erp-estoque) não é vendido.`);
+    if (Number(p.servico)) falha(`${rot} (${p.nome}): serviço não é vendido no caixa (NFC-e é só de mercadoria).`);
     if (digitos(p.ncm).length !== 8) falha(`${rot} (${p.nome}): produto sem NCM. Preencha nos dados fiscais do produto (erp-estoque).`);
     if (!p.grupo_trib_id) falha(`${rot} (${p.nome}): produto sem grupo tributário. Preencha nos dados fiscais do produto (erp-estoque).`);
+    if (!p.cst_ibscbs || !p.cclass_trib) falha(`${rot} (${p.nome}): o grupo tributário "${p.grupo_descricao}" não tem CST do IBS/CBS e cClassTrib. Complete o grupo (erp-estoque).`);
     if (comST(p, simples) && digitos(p.cest).length !== 7) falha(`${rot} (${p.nome}): produto com substituição tributária sem CEST. Preencha nos dados fiscais do produto (erp-estoque).`);
     const cfop = interestadual ? p.cfop_fora_uf : p.cfop_dentro_uf;
     if (!cfop) falha(`${rot} (${p.nome}): o grupo tributário não tem CFOP ${interestadual ? 'interestadual' : 'estadual'}.`);
     const gtin = gtinPublico(p.codigo_barras); // código interno: SEM GTIN
     const diferenca = centavos(final - bruto);
     return {
-      codigo: p.sku || String(p.id),
+      codigo: digitos(p.codigo_barras) || String(p.id), // cProd = EAN do cadastro ou o id (o mesmo do P2 e da busca do caixa)
       ...(gtin && { ean: gtin }),
       descricao: p.nome,
       ncm: digitos(p.ncm),
@@ -220,11 +233,13 @@ export async function montarDocumento(v: Venda, emit: any, grupo: number, empres
         : { valorUnitario: Math.round((final / q) * 1e10) / 1e10, valorTotal: final }),
       imposto: {
         origem: Number(p.origem ?? 0),
-        ...icmsDoItem(p, simples, rot),
+        ...icmsDoItem(p, simples, `${rot} (${p.nome})`),
         aliquota: Number(p.aliquota_icms || 0),
         pis: { cst: p.cst_pis, aliquota: Number(p.aliquota_pis || 0) },
         cofins: { cst: p.cst_cofins, aliquota: Number(p.aliquota_cofins || 0) },
-        ...(p.cst_ibscbs && { ibscbs: { cst: p.cst_ibscbs, classificacao: p.cclass_trib, aliquotaIBSUF: IBS_UF, aliquotaIBSMun: 0, aliquotaCBS: CBS } }),
+        ...(p.cst_ibscbs && { ibscbs: { cst: p.cst_ibscbs, classificacao: p.cclass_trib, aliquotaIBSUF: p.cst_ibscbs === '000' ? IBS_UF : 0, aliquotaIBSMun: 0, aliquotaCBS: p.cst_ibscbs === '000' ? CBS : 0 } }),
+        // Imposto Seletivo do grupo (extras/2026-11-23_imposto_seletivo.sql do erp-estoque): só a alíquota percentual
+        ...(p.cst_is && { seletivo: { cst: p.cst_is, classificacao: p.cclass_trib_is, aliquota: Number(p.aliquota_is || 0) } }),
       },
       final,
     };
@@ -243,6 +258,7 @@ export async function montarDocumento(v: Venda, emit: any, grupo: number, empres
     if (!(Number(pg.valor) > 0)) falha(`Pagamento ${n + 1}: valor inválido.`);
     const i = inter.get(Number(pg.intermediadorId));
     if (!i) falha(`Pagamento ${n + 1} (${meio.nome}): informe o intermediador do pagamento (Requisito XI).`);
+    if (i.tipo !== 'P') falha(`Pagamento ${n + 1} (${meio.nome}): ${i.nome_fantasia} é intermediador da transação, não do pagamento (Requisito XI).`);
     const cnpjPag = digitos(pg.cnpjPagamento);
     const cnpjTef = Number(pg.integracao) === 1 ? digitos(pg.cnpjCredenciadora) : '';
     const cnpjCartao = cnpjTef.length === 14 ? cnpjTef : digitos(i.cnpj);
@@ -265,9 +281,10 @@ export async function montarDocumento(v: Venda, emit: any, grupo: number, empres
     };
   });
   const pago = centavos(pagamentos.reduce((s, p) => s + p.valor, 0));
-  if (pago + 0.005 < totalNota) falha(`Pagamentos (${pago.toFixed(2)}) menores que o total (${totalNota.toFixed(2)}).`);
+  if (!validar && pago + 0.005 < totalNota) falha(`Pagamentos (${pago.toFixed(2)}) menores que o total (${totalNota.toFixed(2)}).`);
   const troco = centavos(pago - totalNota);
-  if (troco > 0 && !pagamentos.some((p) => p.forma === '01') && troco > 0.01) falha('Troco só em pagamento com dinheiro.');
+  const dinheiro = centavos(pagamentos.reduce((s, p) => s + (p.forma === '01' ? p.valor : 0), 0));
+  if (troco > 0 && troco >= dinheiro) falha(`Troco de ${troco.toFixed(2)}: o troco só sai de pagamento em dinheiro, e o dinheiro (${dinheiro.toFixed(2)}) precisa ser maior que o troco.`);
 
   const transacao = v.intermediadorTransacaoId ? inter.get(Number(v.intermediadorTransacaoId)) : null;
   if (v.intermediadorTransacaoId && (!transacao || transacao.tipo !== 'T')) falha('Intermediador da transação não encontrado.');
@@ -281,7 +298,7 @@ export async function montarDocumento(v: Venda, emit: any, grupo: number, empres
       finalidade: 1,
       consumidorFinal: nfce || indIEDest === 9 ? 1 : 0,
       presencial: transacao ? 9 : 1,
-      versaoProcesso: `${PAF.nome} ${PAF.versao}`,
+      versaoProcesso: `${PAF.nome} ${await versaoPaf()}`,
       ...(transacao
         ? { intermediador: { cnpj: digitos(transacao.cnpj), identificador: transacao.identificacao } }
         : { indicadorIntermediador: 0 }),
@@ -350,11 +367,15 @@ export function createNotasRouter() {
           );
         }
         await con.query('DELETE FROM mov_nfce_pagamentos WHERE mov_nfce_id_app = ?', [v.idApp]);
+        // Dinheiro gravado sem o troco: o A2 do Arquivo I soma o que ficou no caixa, igual ao total do J1/N1
+        let troco = Math.max(0, Math.round((m.pagamentos.reduce((t, p) => t + Number(p.valor), 0) - m.totalNota) * 100));
         for (const p of m.pagamentos) {
+          const desconta = p.forma === '01' ? Math.min(troco, Math.round(Number(p.valor) * 100)) : 0;
+          troco -= desconta;
           await con.query(
             `INSERT INTO mov_nfce_pagamentos (mov_nfce_id_app, empresa_id, data, modelo, tpag, valor, intermediador_id, cnpj_pag, uf_pag, bandeira, autorizacao, criado_em)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [v.idApp, empresa, agora.slice(0, 10), m.modelo, p.forma, p.valor, p.intermediador.id, p.cnpjPagamento ?? null, p.ufPagamento ?? null,
+            [v.idApp, empresa, agora.slice(0, 10), m.modelo, p.forma, (Math.round(Number(p.valor) * 100) - desconta) / 100, p.intermediador.id, p.cnpjPagamento ?? null, p.ufPagamento ?? null,
               p.cartao?.bandeira ?? null, p.cartao?.autorizacao ?? null, agora],
           );
         }
@@ -363,9 +384,21 @@ export function createNotasRouter() {
         await con.rollback();
         // A nota já saiu: o registro no ERP falhar não pode esconder isso do caixa
         console.error('Nota emitida, mas o registro da venda falhou:', e);
-        return { ...resumo(dados, situacao, m.modelo), aviso: `Nota emitida, mas o registro da venda no ERP falhou: ${(e as any)?.sqlMessage || (e as any)?.message}` };
+        // registroPendente: o caixa guarda a venda e reenvia com o mesmo idApp (o erp-nfe devolve a mesma nota) até gravar
+        return { ...resumo(dados, situacao, m.modelo), registroPendente: true, aviso: `Nota emitida, mas o registro da venda no ERP falhou: ${(e as any)?.sqlMessage || (e as any)?.message}` };
       } finally {
         con.release();
+      }
+      // Baixa do estoque (registro E2 do Arquivo I): falhar aqui também não esconde a nota emitida
+      try {
+        const [[nd]]: any = await pool.query('SELECT id FROM nfe_documentos WHERE empresa_id = ? AND referencia = ? LIMIT 1', [emit.id, referencia]);
+        if (nd) {
+          await baixarEstoque(empresa, Number(nd.id), m.linhas.map((l) => ({ produto_id: Number(l.p.id), quantidade: l.q })),
+            String(s.userName ?? ''), `${m.modelo === '65' ? 'NFC-e' : 'NF-e'} ${dados.numero ?? ''} do caixa`);
+        }
+      } catch (e) {
+        console.error('Nota emitida, mas a baixa do estoque falhou:', e);
+        return { ...resumo(dados, situacao, m.modelo), aviso: `Nota emitida, mas a baixa do estoque falhou: ${(e as any)?.sqlMessage || (e as any)?.message}` };
       }
     }
     if (['rejeitada', 'denegada'].includes(situacao)) falha(`${m.modelo === '65' ? 'NFC-e' : 'NF-e'} ${situacao}: ${dados?.cStat ?? ''} - ${dados?.motivo ?? ''}`, 422);
@@ -379,11 +412,25 @@ export function createNotasRouter() {
     const emit = await emitenteDe(uid, empresa);
     const chave = digitos(req.body?.chave);
     if (chave.length !== 44) falha('Chave inválida.');
-    const resp = await postar(emit.id, uid, '/api/danfe', { chave, rodape: { operador: s.userName, caixa: s.caixaNumero, versao: `${PAF.nome} ${PAF.versao}` } });
+    // 2ª via da contingência com a marca "VIA DO ESTABELECIMENTO" (Anexo 11, art. 104, § 6º)
+    const via = req.body?.via === 'estabelecimento' ? '?via=estabelecimento' : '';
+    const resp = await postar(emit.id, uid, `/api/danfe${via}`, { chave, rodape: { operador: s.userName, caixa: s.caixaNumero, versao: `${PAF.nome} ${await versaoPaf()}` } });
     if (!resp.ok) falha(mensagemDe(await resp.json().catch(() => ({})), resp.status));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="DANFE-${chave}.pdf"`);
     res.send(Buffer.from(await resp.arrayBuffer()));
+  }));
+
+  /** Nome do consumidor pelo CPF/CNPJ no cadastro de pessoas do grupo (cabeçalhos do caixa e da tela do cliente) */
+  r.get('/nfce/consumidor/:doc', rota(async (req, res) => {
+    const doc = digitos(req.params.doc);
+    if (!(doc.length === 11 ? cpfValido(doc) : doc.length === 14 && cnpjValido(doc))) falha('CPF/CNPJ inválido.');
+    const consulta = (campos: string) =>
+      pool.query(`SELECT ${campos} FROM cad_pessoas WHERE cpf_cnpj = ? AND grupo_id = ? AND ativo = 1 AND date_delete IS NULL LIMIT 1`, [doc, grupoDa(res)]);
+    // clube_desconto: associado do clube de descontos (sem o SQL do clube, ninguém é)
+    // ie: CPF com IE no cadastro é produtor primário (a venda sai em NF-e)
+    const [[p]]: any = await consulta('nome, ie, clube_desconto').catch((e: any) => (e?.code === 'ER_BAD_FIELD_ERROR' ? consulta('nome, ie') : Promise.reject(e)));
+    return { nome: p?.nome ?? null, clube: Number(p?.clube_desconto) === 1, ie: digitos(p?.ie) ? String(p.ie).trim() : null };
   }));
 
   /** XML da nota autorizada para o cliente, quando ele pedir (RICMS/SC Anexo 11, art. 103, § 5º) */
@@ -440,6 +487,8 @@ export function createNotasRouter() {
     const { status, dados } = await chamar(emit.id, uid, '/api/evento', { chave, tipoEvento: '110111', protocolo: d.protocolo, justificativa });
     if (status >= 400 || !dados?.sucesso) falha(mensagemDe({ error: dados?.error || `${dados?.cStat ?? ''} - ${dados?.xMotivo ?? 'Cancelamento recusado'}` }, status));
     await pool.query("UPDATE mov_nfce SET cancelado = 'S', date_update = ? WHERE id_app = ? AND empresa_id = ?", [dataHoraSql(), String(d.referencia).slice(4), empresa]);
+    // Os itens voltam ao estoque; se falhar, a próxima venda ou o Menu Fiscal estornam (estornarCancelados)
+    await estornarCancelados(empresa).catch((e) => console.error('Estorno do estoque do cancelamento:', e));
     return { success: true, motivo: `${dados.cStat} - ${dados.xMotivo}` };
   }));
 
@@ -458,10 +507,10 @@ export function createNotasRouter() {
     const [pags]: any = await pool.query(
       `SELECT p.tpag, p.valor, DATE_FORMAT(p.data, '%Y-%m-%d') AS data, p.cnpj_pag, p.uf_pag, p.bandeira, p.autorizacao, i.cnpj AS cnpj_inter
          FROM mov_nfce_pagamentos p JOIN cad_intermediadores i ON i.id = p.intermediador_id
-        WHERE p.mov_nfce_id_app = ? AND p.empresa_id = ?`,
+        WHERE p.mov_nfce_id_app = ? AND p.empresa_id = ? AND p.tpag <> '01'`, // EConf é para pagamento eletrônico: dinheiro não vai
       [String(d.referencia).slice(4), empresa],
     );
-    if (!pags.length) falha('Esta venda não tem pagamentos gravados no ERP.');
+    if (!pags.length) falha('Esta venda não tem pagamento eletrônico gravado no ERP (dinheiro não vai no EConf).');
     const pagamentosEConf = pags.map((p: any) => ({
       indPag: 0,
       tPag: p.tpag,
@@ -495,7 +544,7 @@ export function createNotasRouter() {
     const identificacao = String(b.identificacao || '').trim().slice(0, 60);
     if (!nome) falha('Informe o nome fantasia.');
     if (!cnpjValido(cnpj)) falha('CNPJ inválido.');
-    if (tipo === 'T' && !identificacao) falha('Informe a identificação do estabelecimento no intermediador.');
+    if (!identificacao) falha('Informe a identificação do estabelecimento no intermediador.');
     const agora = dataHoraSql();
     if (b.id) {
       await pool.query(
@@ -504,14 +553,16 @@ export function createNotasRouter() {
       );
       return { success: true, id: b.id };
     }
-    // Código sequencial de 3 dígitos por empresa; o índice único segura duas inclusões ao mesmo tempo
-    const [[m]]: any = await pool.query('SELECT MAX(CAST(codigo AS UNSIGNED)) AS ultimo FROM cad_intermediadores WHERE empresa_id = ?', [empresa]);
-    const codigo = String((Number(m?.ultimo) || 0) + 1).padStart(3, '0');
-    if (codigo.length > 3) falha('A tabela de intermediadores chegou a 999 códigos.');
-    const [ins]: any = await pool.query(
-      'INSERT INTO cad_intermediadores (empresa_id, codigo, tipo, nome_fantasia, cnpj, identificacao, ativo, criado_em) VALUES (?, ?, ?, ?, ?, ?, 1, ?)',
-      [empresa, codigo, tipo, nome, cnpj, identificacao, agora],
-    );
+    // Código numérico de 3 dígitos de livre atribuição do estabelecimento (Requisito X, § 3º); não muda depois de
+    // incluído (o A2 do Arquivo I usa o código). O índice único recusa o repetido, inclusive em duas inclusões ao mesmo tempo
+    const codigo = digitos(b.codigo);
+    if (!/^\d{3}$/.test(codigo)) falha('Informe o código do intermediador com 3 dígitos.');
+    const [ins]: any = await pool
+      .query(
+        'INSERT INTO cad_intermediadores (empresa_id, codigo, tipo, nome_fantasia, cnpj, identificacao, ativo, criado_em) VALUES (?, ?, ?, ?, ?, ?, 1, ?)',
+        [empresa, codigo, tipo, nome, cnpj, identificacao, agora],
+      )
+      .catch((e: any) => (e?.code === 'ER_DUP_ENTRY' ? falha(`O código ${codigo} já é de outro intermediador.`, 409) : Promise.reject(e)));
     return { success: true, id: ins.insertId, codigo };
   }));
 
@@ -521,6 +572,74 @@ export function createNotasRouter() {
     const uid = Number(s.userId);
     const emit = await emitenteDe(uid, empresa);
     const { status, dados } = await chamar(emit.id, uid, '/api/emitir-contingencia', {});
+    if (status >= 400) falha(mensagemDe(dados, status));
+    // Emissão da contingência mais antiga ainda na fila: conta o prazo de transmissão (Anexo 11, art. 104, § 1º)
+    const [[f]]: any = await pool.query(
+      `SELECT DATE_FORMAT(MIN(data_emissao), '%Y-%m-%d') AS mais_antiga FROM nfe_documentos
+        WHERE empresa_id = ? AND modelo = '65' AND situacao = 'contingencia' AND referencia LIKE 'PDV-%'`,
+      [emit.id],
+    );
+    return { ...dados, maisAntiga: f?.mais_antiga ?? null };
+  }));
+
+  /** Confere a venda (itens, cadastro, cliente) antes de cobrar: o erro aparece antes do TEF/PIX */
+  r.post('/nfce/validar', rota(async (req, res, s) => {
+    const empresa = empresaDa(res);
+    const emit = await emitenteDe(Number(s.userId), empresa);
+    const m = await montarDocumento({ ...(req.body as Venda), pagamentos: [] }, emit, grupoDa(res), empresa, true);
+    return { success: true, modelo: m.modelo };
+  }));
+
+  /** DANFE das contingências regeradas e autorizadas já reimpresso: o erp-nfe para de devolvê-las em `autorizadas` */
+  r.post('/nfce/reimpresso', rota(async (req, res, s) => {
+    const chaves = (Array.isArray(req.body?.chaves) ? req.body.chaves : []).map(digitos).filter((c: string) => c.length === 44);
+    if (!chaves.length) falha('Informe as chaves reimpressas.');
+    const uid = Number(s.userId);
+    const emit = await emitenteDe(uid, empresaDa(res));
+    const { status, dados } = await chamar(emit.id, uid, '/api/emitir/reimpresso', { chaves });
+    if (status >= 400) falha(mensagemDe(dados, status));
+    return { success: true };
+  }));
+
+  /** DATETIME que chega em JSON: com fuso (Date serializado em UTC) vira hora de Brasília; sem fuso já é local */
+  const emBrasilia = (x: unknown) =>
+    x == null ? null : /T.*(Z|[+-]\d\d:?\d\d)$/.test(String(x)) ? dataHoraSql(new Date(String(x))) : String(x).replace('T', ' ').slice(0, 19);
+  /** Números reservados e abandonados do PDV (rascunho/rejeitada, sem contingência): a inutilizar (Anexo 11, art. 108) */
+  const numerosAbandonados = async (emitente: number, uid: number) => {
+    const { status, dados } = await chamar(emitente, uid, '/api/emitir-pendentes', undefined, 'GET');
+    if (status >= 400) falha(mensagemDe(dados, status));
+    return ((dados?.itens ?? []) as any[])
+      .filter((i) => !i.referencia || String(i.referencia).startsWith('PDV-'))
+      .map((i) => ({ modelo: String(i.modelo), serie: Number(i.serie), numero: Number(i.numero), data: emBrasilia(i.data ?? i.data_emissao ?? i.atualizado_em), motivo: i.motivo ?? null, referencia: i.referencia ?? null }));
+  };
+  r.get('/nfce/pendentes', rota(async (_req, res, s) => {
+    const uid = Number(s.userId);
+    const emit = await emitenteDe(uid, empresaDa(res));
+    return { itens: await numerosAbandonados(emit.id, uid) };
+  }));
+
+  /** Inutiliza um número abandonado da lista acima (só esses: o caixa não inutiliza número qualquer) */
+  r.post('/nfce/inutilizar', rota(async (req, res, s) => {
+    const uid = Number(s.userId);
+    const emit = await emitenteDe(uid, empresaDa(res));
+    const { modelo, serie, numero } = req.body ?? {};
+    const n = (await numerosAbandonados(emit.id, uid)).find((i) => i.modelo === String(modelo) && i.serie === Number(serie) && i.numero === Number(numero));
+    if (!n) falha('Este número não está entre os reservados e não usados do PDV.');
+    const { status, dados } = await chamar(emit.id, uid, '/api/inutilizar', {
+      modelo: n.modelo, serie: n.serie, numeroInicial: n.numero, numeroFinal: n.numero,
+      justificativa: 'Numero reservado pelo PDV e nao utilizado na emissao',
+    });
+    if (status >= 400 || !dados?.sucesso) falha(mensagemDe({ error: dados?.error || `${dados?.cStat ?? ''} - ${dados?.xMotivo ?? 'Inutilização recusada'}` }, status));
+    return { success: true, motivo: `${dados.cStat} - ${dados.xMotivo}` };
+  }));
+
+  /** NFC-e de contingência recusada: gera de novo com o mesmo número, série e data e transmite (Anexo 11, art. 104, § 4º) */
+  r.post('/nfce/regerar', rota(async (req, res, s) => {
+    const referencia = String(req.body?.referencia ?? '');
+    if (!/^PDV-[\w-]+$/.test(referencia)) falha('Referência inválida.');
+    const uid = Number(s.userId);
+    const emit = await emitenteDe(uid, empresaDa(res));
+    const { status, dados } = await chamar(emit.id, uid, `/api/emitir/${encodeURIComponent(referencia)}/regerar`, {});
     if (status >= 400) falha(mensagemDe(dados, status));
     return dados;
   }));

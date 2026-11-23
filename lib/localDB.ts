@@ -12,6 +12,9 @@ export interface LocalProduct {
   foto?: string | null;
   /** Sigla da unidade (KG = pesado na balança do caixa) */
   unidade?: string | null;
+  /** Clube de descontos: preço do associado e o último dia da promoção (lib/clube.ts) */
+  preco_clube?: number | null;
+  clube_ate?: string | null;
 }
 
 /** Produto vendido por peso: pede o peso à balança (ou digitado) */

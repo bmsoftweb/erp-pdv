@@ -1,26 +1,28 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
-import { ShoppingCart, Search, Plus, Trash2, Printer, CheckCircle, RefreshCw, Database, Menu, ChevronUp, ChevronDown, FileText, X, Package, LogOut, MoreHorizontal, Keyboard, Monitor, Scale } from 'lucide-react';
+import { ShoppingCart, Search, Plus, Trash2, Printer, CheckCircle, RefreshCw, Database, Menu, ChevronUp, ChevronDown, FileText, X, Package, LogOut, MoreHorizontal, Keyboard, Monitor, Scale, UserRound } from 'lucide-react';
 import { toast } from 'sonner';
-import { dataHoraSql, dataSql } from '@/lib/dataHora';
+import { dataHoraSql, dataSql, prazoContingencia } from '@/lib/dataHora';
 import { MEIOS_PAGAMENTO, nomeMeioPagamento, totalDoItem, modeloDoDocumento, digitos, cpfValido, cnpjValido } from '@/lib/fiscal';
-import { imprimirDanfe, erroDe } from '@/lib/arquivos';
+import { imprimirDanfe, erroDe, emContingencia, reimprimirAutorizadas } from '@/lib/arquivos';
+import { AvisoErro } from '@/components/AvisoErro';
 import { MenuFiscal, MenuFiscalInacessivel } from '@/components/MenuFiscal';
 import { useMenuTeclado, ITEM_MENU, NUMERO_MENU } from '@/components/menuTeclado';
 import { tecladoLigado, ligarTeclado, lerDoCaixa } from '@/components/TecladoVirtual';
-import { usePublicarCupom, abrirTelaCliente, fecharTelaCliente, telaClienteLembrada } from '@/lib/telaCliente';
+import { usePublicarCupom, abrirTelaCliente, fecharTelaCliente, telaClienteLembrada, useCanalCliente, pedirCpfAoCliente, cancelarCpfNoCliente } from '@/lib/telaCliente';
 import { NotasPdv } from '@/components/NotasPdv';
 import { PesquisaCategoria } from '@/components/PesquisaCategoria';
-import { Intermediadores, Intermediador } from '@/components/Intermediadores';
+import { CampoIntermediador, Intermediadores, Intermediador } from '@/components/Intermediadores';
 import { EditarItem } from '@/components/EditarItem';
 import { Toggle } from '@/components/Toggle';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { Janela, BOTAO, BOTAO_PRIMARIO, BOTAO_SECUNDARIO } from '@/components/Janela';
+import { Janela, AvisoMenuFiscal, BOTAO, BOTAO_PRIMARIO, BOTAO_SECUNDARIO } from '@/components/Janela';
 import { NumberField } from '@/components/NumberField';
 import { TefSitef, ResultadoTef } from '@/components/TefSitef';
 import { PixBanco } from '@/components/PixBanco';
 import { Vitrine } from '@/components/Vitrine';
 import { ConfigSitef, DocumentoTef, FUNCAO_SITEF, novoDocumento, finalizar, imprimirComprovantes } from '@/lib/sitef';
 import { db, LocalProduct, substituirProdutos, buscarProdutos, porKg } from '@/lib/localDB';
+import { precoNaVenda } from '@/lib/clube';
 import { balancaDoCaixa, atualizarBalanca, lerPeso, escolherPorta } from '@/lib/balanca';
 
 interface Product {
@@ -30,6 +32,8 @@ interface Product {
   preco_venda: string | number;
   iat?: string | null;
   unidade?: string | null;
+  preco_clube?: number | null;
+  clube_ate?: string | null;
 }
 
 interface CartItem {
@@ -44,6 +48,8 @@ interface CartItem {
 /** Funções chamadas digitando o código no campo do EAN (+ Enter) */
 const CODIGOS = [
   ['00', 'ajuda', 'Tela de ajuda (esta lista)'],
+  ['11', 'cpf', 'CPF na nota: o cliente digita na tela dele'],
+  ['15', 'quantidade', 'Informar a quantidade do próximo item (= F3)'],
   ['99', 'fechar', 'Fechar cupom'],
   ['22', 'item', 'Cancelar item'],
   ['33', 'cupom', 'Cancelar cupom'],
@@ -62,6 +68,25 @@ const TECLAS = [
   ['F5', 'Consultar preço'],
   ['F6', 'Cancelar item'],
 ] as const;
+
+/**
+ * Vendas com a nota emitida cujo registro no ERP falhou (mov_nfce): reenviadas com o mesmo idApp até gravar
+ * (o erp-nfe devolve a mesma nota pela referência, sem emitir outra).
+ * ponytail: no localStorage do caixa; limpar os dados do navegador perde a fila.
+ */
+const PENDENTES = 'pdv-registros-pendentes';
+const lerPendentes = (): any[] => { try { return JSON.parse(localStorage.getItem(PENDENTES) || '[]'); } catch { return []; } };
+const gravarPendentes = (l: any[]) => { try { localStorage.setItem(PENDENTES, JSON.stringify(l)); } catch { /* armazenamento bloqueado */ } };
+const avisoPendentes = (n: number) => `${n} venda(s) com a nota emitida ainda sem registro no ERP. O caixa tenta gravar de novo a cada minuto: não limpe os dados do navegador.`;
+/** Registros que o servidor recusou de vez (4xx: produto inativado, conflito…): saem do reenvio, com o motivo */
+const FALHOS = 'pdv-registros-falhos';
+const lerFalhos = (): any[] => { try { return JSON.parse(localStorage.getItem(FALHOS) || '[]'); } catch { return []; } };
+const gravarFalhos = (l: any[]) => { try { localStorage.setItem(FALHOS, JSON.stringify(l)); } catch { /* armazenamento bloqueado */ } };
+const avisoFalhos = (l: any[]) => `${l.length} venda(s) com a nota emitida e o registro no ERP recusado (o caixa parou de tentar). Registre no ERP:
+${l.map((f) => `• Venda ${f.idApp}: ${f.motivo}`).join('\n')}`;
+/** Sessão expirada, tempo esgotado ou excesso de pedidos: tenta de novo; outro 4xx é definitivo */
+const erroDefinitivo = (status: number) => status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status);
+const dataBr = (s: string) => `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}`;
 
 const precoDe = (p: Product) => (typeof p.preco_venda === 'string' ? parseFloat(p.preco_venda) : p.preco_venda);
 
@@ -141,20 +166,14 @@ const unTexto = (q: number, p: LocalProduct) => p.unidade?.toLowerCase() || (q %
 export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSair: () => void }) {
   const [ean, setEan] = useState('');
   const [quantidade, setQuantidade] = useState<number>(1);
-  const [quantidadeText, setQuantidadeText] = useState('1,000');
-  
+  const [quantidadeText, setQuantidadeText] = useState('1');
+
+  /** Digitação comum, não a bancária do app: 12 → 12; 1,570 → 1,570 (até 3 casas). O ponto do teclado numérico vira vírgula */
   const handleQtyChange = (val: string) => {
-    const digits = val.replace(/\D/g, '');
-    if (!digits) {
-      setQuantidadeText('');
-      setQuantidade(0);
-      return;
-    }
-    const numValue = parseInt(digits, 10) / 1000; // sempre 3 casas: 1250 → 1,250 (kg)
-    setQuantidadeText(
-      new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(numValue)
-    );
-    setQuantidade(numValue);
+    const [, inteiro = '', decimais] = val.replace(/\./g, ',').replace(/[^\d,]/g, '').match(/^(\d{0,6})(,\d{0,3})?/) ?? [];
+    const texto = inteiro + (decimais ?? '');
+    setQuantidadeText(texto);
+    setQuantidade(Number(texto.replace(',', '.')) || 0);
   };
   const [pesando, setPesando] = useState(false);
   
@@ -267,6 +286,15 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
   const [payUf, setPayUf] = useState('');
   const [consumidorDoc, setConsumidorDoc] = useState('');
   const [consumidorIe, setConsumidorIe] = useState('');
+  /** Nome do cadastro (cad_pessoas) do CPF/CNPJ informado; null = sem cadastro ou sem conexão */
+  const [consumidorNome, setConsumidorNome] = useState<string | null>(null);
+  /** Consumidor é associado do clube de descontos: os itens saem pelo preço do clube */
+  const [consumidorClube, setConsumidorClube] = useState(false);
+  const precoItem = (p: Product) => precoNaVenda(p, consumidorClube, dataSql());
+  /** CPF pedido ao cliente: esperando ele digitar na tela dele */
+  const [esperandoCpf, setEsperandoCpf] = useState(false);
+  /** ...ou o operador digita no mesmo modal (só dígitos) */
+  const [cpfOperador, setCpfOperador] = useState('');
   const [interTransacao, setInterTransacao] = useState(0);
   const [descontoTotal, setDescontoTotal] = useState('');
   const [acrescimoTotal, setAcrescimoTotal] = useState('');
@@ -274,6 +302,10 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
   const [editandoItem, setEditandoItem] = useState<string | null>(null);
   const [valorItem, setValorItem] = useState('');
   const [emitindo, setEmitindo] = useState(false);
+  /** Aviso âmbar no canto (fila de contingência parada, registro de venda pendente) */
+  const [alerta, setAlerta] = useState('');
+  /** Aviso vermelho no canto (registro de venda recusado, prazo da contingência vencido) */
+  const [erroAviso, setErroAviso] = useState('');
   /**
    * Um id por venda, do primeiro "Emitir" até a próxima venda: repetir nunca gera outra nota, e a nota
    * recusada (rascunho/rejeitada) é gerada de novo com o cupom corrigido, no mesmo número.
@@ -303,6 +335,7 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
     setIsCheckoutOpen(true);
     setPayments([]);
     setPaymentForm('01');
+    setPayInter(0);
     setIsPaymentValueModalOpen(false);
     setIsChangeModalOpen(false);
     setChangeAmount(0);
@@ -358,7 +391,24 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
     setIsPaymentValueModalOpen(false);
   };
 
-  const addPayment = () => {
+  /** Confere a venda no servidor antes de cobrar (serviço, inativo, grupo tributário, NCM, CEST, cliente da NF-e) */
+  const validandoRef = useRef(false);
+  const vendaValida = async () => {
+    if (validandoRef.current) return false;
+    validandoRef.current = true;
+    try {
+      const r = await fetch('/api/nfce/validar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dadosVenda()) });
+      if (r.ok) return true;
+      showErrorToast('A venda não pode ser emitida: corrija antes de cobrar.', { description: await erroDe(r) });
+      return false;
+    } catch {
+      return true; // sem servidor: a emissão confere de novo (e a venda só conclui com conexão)
+    } finally {
+      validandoRef.current = false;
+    }
+  };
+
+  const addPayment = async () => {
     const val = round2(parseFloat(paymentValue.replace(',', '.')));
     if (isNaN(val) || val <= 0) {
       showErrorToast('Informe um valor de pagamento válido.');
@@ -373,6 +423,7 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
       showErrorToast('CNPJ ou UF do estabelecimento do pagamento inválidos.');
       return;
     }
+    if (!(await vendaValida())) return;
 
     const currentTotalPago = round2(payments.reduce((acc, p) => acc + p.valor, 0));
     const remaining = round2(total - currentTotalPago);
@@ -380,6 +431,11 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
     if (val > remaining) {
       if (paymentForm !== '01') {
         showErrorToast('Valor maior que o restante: troco só em dinheiro.');
+        return;
+      }
+      // Venda já paga: o troco seria o dinheiro inteiro (o dinheiro precisa ser maior que o troco)
+      if (remaining <= 0) {
+        showErrorToast('A venda já está paga: não cabe outro pagamento.');
         return;
       }
       // Intercept for Change modal!
@@ -423,6 +479,7 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
       ...(digitos(payCnpj) && { cnpjPagamento: digitos(payCnpj), ufPagamento: payUf }),
     };
     setPayAutorizacao('');
+    setPayInter(0); // o próximo pagamento pede o intermediador de novo
 
     const newPayments = [...payments, newPayment];
     setPayments(newPayments);
@@ -520,7 +577,8 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
         lista = guardada;
       }
       setIntermediadores(lista);
-      setPayInter((atual) => atual || lista.find((i) => i.tipo === 'P' && i.ativo)?.id || 0);
+      // Sem intermediador escolhido de antemão: o operador informa em cada pagamento (Requisito XI)
+      setPayInter((atual) => (lista.some((i) => i.id === atual && i.tipo === 'P' && i.ativo) ? atual : 0));
     } catch (err) {
       console.error('Intermediadores:', err);
     }
@@ -534,12 +592,77 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
     fetch('/api/caixa/sitef').then((r) => (r.ok ? r.json() : null)).then((d) => setSitef(d?.sitef ?? null)).catch(() => {});
     fetch('/api/pix').then((r) => (r.ok ? r.json() : null)).then((d) => setPixBanco(!!d?.ativo)).catch(() => {});
     // NFC-e em contingência: transmite sozinho a cada minuto e quando a internet volta (Requisito III, II)
+    const avisadas = new Set<string>();
+    let filaParada = '';
+    /** Números abandonados já avisados nesta abertura (avisa de novo só quando a lista muda) */
+    let abandonados = '';
+    if (lerFalhos().length) setErroAviso(avisoFalhos(lerFalhos()));
     const transmitir = async () => {
       if (!navigator.onLine) return;
+      // Registro de venda que falhou depois da nota emitida: reenvia com o mesmo idApp até gravar.
+      // Recusa definitiva (4xx: produto inativado, conflito…) sai do reenvio e vai para os registros com falha
+      const pend = lerPendentes();
+      if (pend.length) {
+        const resta: any[] = [];
+        const falhos: any[] = [];
+        for (const corpo of pend) {
+          const r = await fetch('/api/nfce/emitir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }).catch(() => null);
+          const d = r && (await r.json().catch(() => ({})));
+          if (r && erroDefinitivo(r.status)) falhos.push({ idApp: corpo.idApp, motivo: d?.error || `Erro ${r.status}`, em: dataHoraSql(), corpo });
+          else if (!r?.ok || d?.registroPendente) resta.push(corpo);
+        }
+        // Mantém as que entraram na fila durante o reenvio
+        gravarPendentes([...resta, ...lerPendentes().filter((c) => !pend.some((p) => p.idApp === c.idApp))]);
+        if (falhos.length) {
+          const todos = [...lerFalhos().filter((f) => !falhos.some((n) => n.idApp === f.idApp)), ...falhos];
+          gravarFalhos(todos);
+          setErroAviso(avisoFalhos(todos));
+        }
+        if (resta.length) setAlerta(avisoPendentes(resta.length));
+      }
+      // Números reservados e não usados (rascunho/rejeitada): inutilizar em Notas emitidas (Anexo 11, art. 108)
+      fetch('/api/nfce/pendentes')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!d) return;
+          const l: any[] = d.itens ?? [];
+          const lista = l.map((i) => `${i.modelo === '65' ? 'NFC-e' : 'NF-e'} ${i.serie}/${i.numero}`).join(', ');
+          if (l.length && lista !== abandonados) {
+            const msg = `${l.length} número(s) de nota reservado(s) e não usado(s): ${lista}. Inutilize em Notas emitidas (Anexo 11, art. 108).`;
+            setAlerta((a) => (a ? `${a}\n\n${msg}` : msg));
+          }
+          abandonados = lista;
+        })
+        .catch(() => {});
       try {
         const r = await fetch('/api/nfce/contingencia', { method: 'POST' });
         const d = await r.json();
         if (r.ok && d?.transmitidas) toast.success(`${d.transmitidas} NFC-e de contingência transmitida(s) à SEFAZ.`);
+        // Fila parada (SEFAZ fora, certificado…): avisa uma vez por mudança do erro, da quantidade ou do prazo vencer.
+        // Prazo: primeiro dia útil seguinte à emissão da contingência mais antiga (Anexo 11, art. 104, § 1º); vencido = vermelho
+        const prazo = r.ok && d?.maisAntiga ? prazoContingencia(d.maisAntiga) : '';
+        const vencido = !!prazo && dataSql() > prazo;
+        const parada = r.ok && d?.erro && d?.pendentes > 0 ? `${d.erro}|${d.pendentes}|${vencido}` : '';
+        if (parada && parada !== filaParada) {
+          const ate = prazo ? (vencido ? `PRAZO VENCIDO: era até ${dataBr(prazo)}` : `Prazo: até ${dataBr(prazo)}`) : 'Prazo';
+          (vencido ? setErroAviso : setAlerta)(`Transmissão das NFC-e de contingência parada: ${d.pendentes} nota(s) pendente(s). ${d.erro}
+${ate} (primeiro dia útil seguinte à emissão, Anexo 11, art. 104, § 1º).`);
+        }
+        filaParada = parada;
+        // Contingência regerada que a SEFAZ autorizou: reimprime o DANFE da nota autorizada (Anexo 11, art. 104, § 4º, III)
+        if (r.ok) reimprimirAutorizadas(d?.autorizadas, askConfirm).catch((e) => showErrorToast('Não foi possível reimprimir o DANFE.', { description: e.message }));
+        // Recusada: avisa uma vez por nota; o caixa gera de novo em Notas (Anexo 11, art. 104, § 4º)
+        for (const n of (r.ok && d?.recusadas) || []) {
+          if (avisadas.has(n.chave)) continue;
+          avisadas.add(n.chave);
+          toast.error(`NFC-e ${n.numero} de contingência recusada pela SEFAZ.`, { description: `${n.motivo || ''} Gere de novo em Notas emitidas e reimprima o DANFE.`, duration: Infinity });
+        }
+        // Tentativa normal autorizada que não deu para cancelar no prazo: a venda pede NF-e de estorno (Anexo 11, art. 106)
+        for (const n of (r.ok && d?.estornos) || []) {
+          if (avisadas.has(`estorno-${n.chave}`)) continue;
+          avisadas.add(`estorno-${n.chave}`);
+          toast.warning(`NFC-e ${n.numero} ficou autorizada em duplicidade com a de contingência.`, { description: 'Emita a NF-e de estorno dela (não deu para cancelar no prazo).', duration: Infinity });
+        }
       } catch {
         // tenta no próximo minuto
       }
@@ -737,6 +860,11 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
     if (funcao) {
       setEan('');
       if (funcao === 'ajuda') return setAjudaAberta(true);
+      if (funcao === 'cpf') return pedirCpf();
+      if (funcao === 'quantidade') {
+        setAskForQuantity(true);
+        return void eanInputRef.current?.focus();
+      }
       const semItens = () => showErrorToast('O cupom não tem itens.');
       if (funcao === 'fechar') return cart.length ? openCheckout() : semItens();
       if (funcao === 'item') return cart.length ? setCancelarItem(String(cart.length)) : semItens();
@@ -806,7 +934,7 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
           cartId: Math.random().toString(36).substring(7),
           product: product,
           quantidade: 1,
-          subtotal: totalDoItem(1, unitPrice, product.iat)
+          subtotal: totalDoItem(1, precoItem(product), product.iat)
         };
 
         setCart(prev => [...prev, newItem]);
@@ -856,7 +984,7 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
     const kg = porKg(product);
     setCurrentProduct(product);
     setQuantidade(kg ? 0 : 1);
-    setQuantidadeText(kg ? '' : '1,000');
+    setQuantidadeText(kg ? '' : '1');
     setValorItem('');
     setTimeout(() => {
       qtyInputRef.current?.focus();
@@ -895,7 +1023,7 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
 
   const addToCart = () => {
     if (!currentProduct) return;
-    const price = precoDe(currentProduct);
+    const price = precoItem(currentProduct);
     // Registro pelo valor total: a quantidade sai do total (Requisito VIII, II)
     const informado = Number(valorItem) || 0;
     const q = informado > 0 ? Math.round((informado / price) * 1000) / 1000 : quantidade;
@@ -914,7 +1042,7 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
     // Reset form
     setEan('');
     setQuantidade(1);
-    setQuantidadeText('1,000');
+    setQuantidadeText('1');
     setValorItem('');
     setCurrentProduct(null);
     setAskForQuantity(false);
@@ -939,6 +1067,74 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
   const docConsumidor = digitos(consumidorDoc);
   const docInvalido = !!docConsumidor && !(docConsumidor.length === 11 ? cpfValido(docConsumidor) : docConsumidor.length === 14 && cnpjValido(docConsumidor));
   const modeloVenda = modeloDoDocumento(docConsumidor, docConsumidor.length === 11 ? consumidorIe : '', total);
+  const docValido = (docConsumidor.length === 11 || docConsumidor.length === 14) && !docInvalido;
+  const docFormatado = docConsumidor.length === 11
+    ? docConsumidor.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')
+    : docConsumidor.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
+  // Barra do topo: "NOME - CPF: 528.197.***-13" (CPF com o 3º grupo oculto; CNPJ inteiro)
+  const docNaBarra = docConsumidor.length === 11 ? `CPF: ${docFormatado.replace(/\.\d{3}-/, '.***-')}` : `CNPJ: ${docFormatado}`;
+
+  // Nome do consumidor pelo cadastro do ERP, para os cabeçalhos e a nota
+  useEffect(() => {
+    setConsumidorNome(null);
+    setConsumidorClube(false);
+    if (!docValido) return;
+    let vale = true;
+    fetch(`/api/nfce/consumidor/${docConsumidor}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!vale) return;
+        setConsumidorNome(d?.nome || null);
+        setConsumidorClube(!!d?.clube);
+        // CPF com IE no cadastro: produtor primário, a venda sai em NF-e (o servidor também considera)
+        if (docConsumidor.length === 11 && d?.ie) setConsumidorIe((atual) => atual.trim() || d.ie);
+      })
+      .catch(() => {});
+    return () => { vale = false; };
+  }, [docConsumidor, docValido]);
+
+  // Clube de descontos: entrou ou saiu o associado, os itens lançados mudam de preço (os de valor total
+  // informado, etiqueta de balança ou valor negociado, ficam como estão)
+  const clubeAnterior = useRef(false);
+  useEffect(() => {
+    if (clubeAnterior.current === consumidorClube) return;
+    clubeAnterior.current = consumidorClube;
+    const novos = cart.map((i) => (i.valorTotal != null ? i : { ...i, subtotal: totalDoItem(i.quantidade, precoItem(i.product), i.product.iat) }));
+    const mudou = novos.some((n, k) => n.subtotal !== cart[k].subtotal);
+    if (mudou) setCart(novos);
+    if (consumidorClube) toast.success('Cliente do clube de descontos.', { description: 'Os itens saem pelo preço do clube.' });
+    else if (mudou) toast.info('Preços do clube retirados do cupom.');
+  }, [consumidorClube]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** CPF na nota digitado pelo cliente na tela dele (código 11 ou botão no fechamento) */
+  const pedirCpf = () => {
+    if (!telaClienteLembrada()) return void toast.warning('Abra a tela do cliente (menu Mais) para ele digitar o CPF.');
+    pedirCpfAoCliente();
+    setCpfOperador('');
+    setEsperandoCpf(true);
+  };
+  /** O operador digitou o CPF no modal: vale como se o cliente tivesse digitado, e a tela dele sai do pedido */
+  const confirmarCpfOperador = () => {
+    if (!cpfValido(cpfOperador)) return void toast.error('CPF inválido.');
+    setConsumidorDoc(cpfOperador);
+    setConsumidorIe('');
+    desistirCpf();
+  };
+  const desistirCpf = () => {
+    cancelarCpfNoCliente();
+    setEsperandoCpf(false);
+    setTimeout(() => eanInputRef.current?.focus(), 50);
+  };
+  useCanalCliente((m) => {
+    if (m.tipo !== 'cpf' || !esperandoCpf) return;
+    setEsperandoCpf(false);
+    if (m.cpf) {
+      setConsumidorDoc(m.cpf);
+      setConsumidorIe('');
+      toast.success('CPF informado pelo cliente.');
+    } else toast.info('O cliente não quis CPF na nota.');
+    setTimeout(() => eanInputRef.current?.focus(), 50);
+  }, [esperandoCpf]);
 
   const novaVenda = () => {
     setCart([]);
@@ -950,6 +1146,7 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
     setPaymentValue('');
     setConsumidorDoc('');
     setConsumidorIe('');
+    if (esperandoCpf) desistirCpf();
     setInterTransacao(0);
     setDescontoTotal('');
     setAcrescimoTotal('');
@@ -978,6 +1175,20 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
    * Conclusão da venda = emissão do DF-e (Requisito III): só com internet. Sem resposta da SEFAZ,
    * a NFC-e sai em contingência no servidor. Erro: o cupom continua aberto para corrigir e tentar de novo.
    */
+  /** Itens, consumidor e ajustes da venda como o servidor recebe (emissão e validação antes de cobrar) */
+  const dadosVenda = () => ({
+    itens: cart.map((i) => ({
+      produtoId: Number(i.product.id),
+      quantidade: i.quantidade,
+      valorUnitario: precoItem(i.product),
+      ...(i.valorTotal != null && { valorTotal: i.valorTotal }),
+    })),
+    ...(docConsumidor && { consumidor: { documento: docConsumidor, ...(consumidorNome && { nome: consumidorNome }), ...(docConsumidor.length === 11 && consumidorIe.trim() && { ieProdutor: consumidorIe.trim() }) } }),
+    ajusteTotal,
+    discriminarAjustes: discriminar,
+    ...(interTransacao && { intermediadorTransacaoId: interTransacao }),
+  });
+
   const handleFinalize = async (imprimir: boolean = true) => {
     if (cart.length === 0 || emitindo) return;
     if (!navigator.onLine) {
@@ -994,23 +1205,15 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
     setEmitindo(true);
     let chegou = false;
     try {
+      const corpo = {
+          idApp: idVendaRef.current,
+          ...dadosVenda(),
+          pagamentos: payments.map(({ id, comprovantes, pixTxid, ...p }) => p),
+      };
       const r = await fetch('/api/nfce/emitir', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          idApp: idVendaRef.current,
-          itens: cart.map((i) => ({
-            produtoId: Number(i.product.id),
-            quantidade: i.quantidade,
-            valorUnitario: precoDe(i.product),
-            ...(i.valorTotal != null && { valorTotal: i.valorTotal }),
-          })),
-          ...(docConsumidor && { consumidor: { documento: docConsumidor, ...(docConsumidor.length === 11 && consumidorIe.trim() && { ieProdutor: consumidorIe.trim() }) } }),
-          pagamentos: payments.map(({ id, comprovantes, pixTxid, ...p }) => p),
-          ajusteTotal,
-          discriminarAjustes: discriminar,
-          ...(interTransacao && { intermediadorTransacaoId: interTransacao }),
-        }),
+        body: JSON.stringify(corpo),
       });
       chegou = true;
       const d = await r.json().catch(() => ({}));
@@ -1019,8 +1222,16 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
       if (d.situacao === 'autorizada') toast.success(`${nome} ${d.numero} autorizada.`);
       else if (d.situacao === 'contingencia') toast.warning(`${nome} ${d.numero} emitida em contingência.`, { description: 'Será transmitida à SEFAZ automaticamente.' });
       else throw new Error(`${nome} ${d.numero ?? ''} ainda em processamento na SEFAZ (${d.situacao || 'sem resposta'}). Tente concluir de novo: a mesma venda não gera outra nota.`);
-      if (d.aviso) toast.warning(d.aviso);
-      if (janela && d.chave) imprimirDanfe(d.chave, janela).catch((e) => showErrorToast('Não foi possível abrir o DANFE.', { description: e.message }));
+      if (d.registroPendente) {
+        const fila = [...lerPendentes().filter((c) => c.idApp !== corpo.idApp), corpo];
+        gravarPendentes(fila);
+        setAlerta(`${d.aviso}
+${avisoPendentes(fila.length)}`);
+      } else if (d.aviso) toast.warning(d.aviso);
+      // Contingência: 2ª via com "VIA DO ESTABELECIMENTO", guardada pela loja (Anexo 11, art. 104, § 6º)
+      if (janela && d.chave) imprimirDanfe(d.chave, janela)
+        .then(() => (emContingencia(d.chave, d.situacao) ? imprimirDanfe(d.chave, null, 'estabelecimento') : undefined))
+        .catch((e) => showErrorToast('Não foi possível abrir o DANFE.', { description: e.message }));
       else janela?.close();
       if (temTef && sitef && tefDocRef.current) {
         await finalizar(sitef, tefDocRef.current, true).catch((e) =>
@@ -1220,6 +1431,9 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
     finalizando: isCheckoutOpen,
     pago: totalPago,
     troco: round2(Math.max(0, totalPago - total)),
+    // Sem cadastro, o CPF aparece com o meio escondido (a fila vê a tela do cliente)
+    clube: docValido && consumidorClube,
+    cliente: !docValido ? null : consumidorNome || (docConsumidor.length === 11 ? `CPF ***.${docConsumidor.slice(3, 6)}.${docConsumidor.slice(6, 9)}-**` : `CNPJ ${docFormatado}`),
   });
 
   return (
@@ -1230,7 +1444,8 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
         <div className="absolute inset-0 bg-blue-600 z-[100] flex flex-col items-center justify-center text-white" onClick={() => { setIsStandby(false); setTimeout(() => eanInputRef.current?.focus(), 100); }}>
           <h1 className="text-7xl md:text-[140px] font-black tracking-tighter mb-8">CAIXA LIVRE</h1>
           <p className="text-2xl md:text-3xl font-medium animate-pulse opacity-90">Pressione ENTER para iniciar nova venda</p>
-          <p className="absolute bottom-6 text-xs font-black tracking-widest opacity-60">MENU FISCAL INACESSÍVEL NESTA TELA</p>
+          {/* Tela de espera do caixa: Menu Fiscal acessível (Requisito VI) */}
+          <button type="button" onClick={(e) => { e.stopPropagation(); setIsStandby(false); setIsMenuFiscalOpen(true); }} className="absolute bottom-6 px-5 py-2.5 rounded-lg border border-white/50 text-xs font-black tracking-widest hover:bg-white/10 cursor-pointer">MENU FISCAL</button>
         </div>
       )}
 
@@ -1259,6 +1474,20 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
                 </p>
               </div>
             </div>
+            {/* CPF na nota a qualquer momento (no começo da venda vale para os preços do cliente); com CPF, clicar troca */}
+            <button
+              type="button"
+              onClick={pedirCpf}
+              title={docValido ? 'Consumidor da venda' : 'CPF na nota (11)'}
+              data-dica-desc={docValido ? `${docFormatado} · clique para o cliente digitar outro` : 'Abre o teclado na tela do cliente para ele digitar o CPF'}
+              className={`min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-lg border cursor-pointer ${
+                docValido ? 'bg-blue-50 border-blue-100 text-blue-800 hover:bg-blue-100' : 'border-dashed border-stone-300 text-stone-500 hover:text-blue-700 hover:border-blue-300'
+              }`}
+            >
+              <UserRound size={18} className="shrink-0" />
+              <span className="text-sm font-bold uppercase truncate">{docValido ? (consumidorNome ? `${consumidorNome} - ${docNaBarra}` : docNaBarra) : 'CPF na nota'}</span>
+              {docValido && consumidorClube && <span className="shrink-0 text-[10px] font-black px-1.5 py-0.5 rounded bg-amber-400 text-amber-950">CLUBE</span>}
+            </button>
             <div className="flex items-center gap-3 shrink-0">
               {usuario.userName && <span className="text-xs font-semibold text-stone-500 hidden sm:inline">{usuario.userName}</span>}
               <button
@@ -1414,7 +1643,18 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
                 >
                   <div>
                     <div className="flex justify-between items-center mb-1">
-                      <label htmlFor="consumidorDoc" className="text-xs font-semibold text-stone-500">CPF/CNPJ do consumidor</label>
+                      <span className="flex items-center gap-2">
+                        <label htmlFor="consumidorDoc" className="text-xs font-semibold text-stone-500">CPF/CNPJ do consumidor</label>
+                        <button
+                          type="button"
+                          onClick={pedirCpf}
+                          title="Cliente digita (11)"
+                          data-dica-desc="Abre o teclado na tela do cliente para ele digitar o CPF"
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:underline cursor-pointer"
+                        >
+                          <Monitor size={12} /> Cliente digita
+                        </button>
+                      </span>
                       <span className={`text-[10px] font-black ${docInvalido || (modeloVenda === '55' && !docConsumidor) ? 'text-rose-600' : 'text-blue-700'}`}>
                         {docInvalido ? 'INVÁLIDO' : modeloVenda === '55' ? (docConsumidor ? 'NF-e (modelo 55)' : 'NF-e: INFORME O CPF/CNPJ') : 'NFC-e (modelo 65)'}
                       </span>
@@ -1458,12 +1698,10 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
                   {intermediadores.some((i) => i.tipo === 'T' && i.ativo) && (
                     <div>
                       <label className="block text-xs font-semibold text-stone-500 mb-1">Intermediador da transação</label>
-                      <select className="w-full bg-blue-500/[0.03] p-2 px-3 text-sm" value={interTransacao} onChange={(e) => setInterTransacao(Number(e.target.value))}>
-                        <option value={0}>Nenhum (venda direta)</option>
-                        {intermediadores.filter((i) => i.tipo === 'T' && i.ativo).map((i) => (
-                          <option key={i.id} value={i.id}>{i.codigo} - {i.nome_fantasia}</option>
-                        ))}
-                      </select>
+                      <CampoIntermediador
+                        className="w-full bg-blue-500/[0.03] p-2 px-3 text-sm" lista={intermediadores.filter((i) => i.tipo === 'T' && i.ativo)}
+                        valor={interTransacao} onChange={setInterTransacao} vazio="Venda direta (código, nome ou CNPJ)"
+                      />
                     </div>
                   )}
                 </div>
@@ -2092,6 +2330,7 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
       {/* Modal de Digitação de Valor do Pagamento */}
       {isPaymentValueModalOpen && (
         <div className="fixed inset-0 bg-stone-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-[150] animate-in fade-in duration-200">
+          <AvisoMenuFiscal />
           <div role="dialog" aria-modal="true" className="bg-white border border-stone-200 rounded-2xl shadow-2xl w-full max-w-sm p-5 animate-in zoom-in-95 duration-200 flex flex-col">
             <div className="flex justify-between items-center mb-4">
               <span className="text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-1 rounded-lg tracking-wider uppercase">
@@ -2131,16 +2370,10 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
             <div className="space-y-3 mb-5 text-xs">
               <div>
                 <label className="block text-xs font-semibold text-stone-500 mb-1">Intermediador do pagamento</label>
-                <select
+                <CampoIntermediador
                   className="w-full bg-blue-500/[0.03] disabled:bg-stone-50 px-3 py-2 text-sm font-medium text-stone-800"
-                  value={payInter}
-                  onChange={(e) => setPayInter(Number(e.target.value))}
-                >
-                  {!payInter && <option value={0}>Escolha…</option>}
-                  {intermediadoresPagamento.map((i) => (
-                    <option key={i.id} value={i.id}>{i.codigo} - {i.nome_fantasia}</option>
-                  ))}
-                </select>
+                  lista={intermediadoresPagamento} valor={payInter} onChange={setPayInter} vazio="Código, nome ou CNPJ"
+                />
               </div>
               {meioTef && (
                 <Toggle checked={cartaoAMao} onChange={setCartaoAMao} size="sm" label="Lançar à mão, sem TEF (maquininha à parte)" />
@@ -2229,6 +2462,7 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
       {/* Modal do Troco (Change Modal) */}
       {isChangeModalOpen && (
         <div className="fixed inset-0 bg-stone-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-[160] animate-in fade-in duration-200">
+          <AvisoMenuFiscal />
           <div role="dialog" aria-modal="true" className="bg-white border border-stone-200 rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95 duration-200 flex flex-col text-center">
             <span className="text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1 rounded-full tracking-widest uppercase mx-auto mb-3">
               TROCO REQUERIDO
@@ -2367,13 +2601,43 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
               setCart((c) => c.map((x) => x.cartId !== it.cartId ? x : {
                 ...x,
                 valorTotal: novo ?? undefined,
-                subtotal: novo ?? totalDoItem(x.quantidade, precoDe(x.product), x.product.iat),
+                subtotal: novo ?? totalDoItem(x.quantidade, precoItem(x.product), x.product.iat),
               }));
               setEditandoItem(null);
             }}
           />
         );
       })()}
+
+      {esperandoCpf && (
+        <Janela
+          titulo="CPF na nota"
+          onFechar={desistirCpf}
+          largura="max-w-sm"
+          rodape={
+            <>
+              <button type="button" className={BOTAO_SECUNDARIO} onClick={desistirCpf}>Cancelar (Esc)</button>
+              <button type="button" className={BOTAO_PRIMARIO} onClick={confirmarCpfOperador} disabled={cpfOperador.length !== 11}>Confirmar (Enter)</button>
+            </>
+          }
+        >
+          <p className="text-sm text-stone-600 flex items-center gap-3">
+            <Monitor size={28} className="text-blue-600 shrink-0 animate-pulse" />
+            Esperando o cliente digitar o CPF na tela dele.
+          </p>
+          <label htmlFor="cpfOperador" className="block text-xs font-semibold text-stone-500 mt-4 mb-1">Ou digite aqui o CPF que o cliente falar</label>
+          <input
+            id="cpfOperador"
+            autoFocus
+            className="w-full bg-blue-500/[0.03] p-2 px-3 text-lg font-mono"
+            inputMode="numeric"
+            placeholder="000.000.000-00"
+            value={cpfOperador.replace(/^(\d{3})(\d)/, '$1.$2').replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3').replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2')}
+            onFocus={(e) => e.target.select()}
+            onChange={(e) => setCpfOperador(digitos(e.target.value).slice(0, 11))}
+          />
+        </Janela>
+      )}
 
       {ajudaAberta && (
         <Janela
@@ -2400,6 +2664,8 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
       )}
 
 {/* Confirm Dialog */}
+      {alerta && <AvisoErro tom="alerta" mensagem={alerta} onFechar={() => setAlerta('')} />}
+      {erroAviso && <AvisoErro mensagem={erroAviso} onFechar={() => setErroAviso('')} />}
       {confirmDialog.isOpen && (
         <div className="relative z-[300]">
           <ConfirmDialog
@@ -2407,7 +2673,7 @@ export default function POSPage({ usuario, onSair }: { usuario: UsuarioPdv; onSa
             mensagem={confirmDialog.message}
             confirmar="Sim"
             cancelar="Não"
-            tom={/^(Remover|Cancelar)/.test(confirmDialog.message) ? 'perigo' : 'normal'}
+            tom={/^(Remover|Cancelar|Inutilizar)/.test(confirmDialog.message) ? 'perigo' : 'normal'}
             onConfirmar={confirmDialog.onConfirm}
             onCancelar={confirmDialog.onCancel}
           />

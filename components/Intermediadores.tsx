@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import { Pencil, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Janela, BOTAO_PRIMARIO, BOTAO_SECUNDARIO } from './Janela';
@@ -17,8 +17,39 @@ export interface Intermediador {
   ativo: number;
 }
 
-const NOVO = { id: 0, tipo: 'P' as 'P' | 'T', nome_fantasia: '', cnpj: '', identificacao: '', ativo: 1 };
+const NOVO = { id: 0, codigo: '', tipo: 'P' as 'P' | 'T', nome_fantasia: '', cnpj: '', identificacao: '', ativo: 1 };
+/** Sugestão para o código novo: o próximo depois do maior (a loja pode trocar) */
+const proximoCodigo = (l: Intermediador[]) => String(Math.max(0, ...l.map((i) => Number(i.codigo) || 0)) + 1).padStart(3, '0').slice(-3);
 const formatarCnpj = (c: string) => c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+const rotulo = (i: Intermediador) => `${i.codigo} · ${i.nome_fantasia} · ${formatarCnpj(i.cnpj)}`;
+
+/**
+ * Intermediador pelo código, nome fantasia ou CNPJ (Requisito XI, I; roteiro do Ato DIAT 56/2026, Teste 7): achou,
+ * mostra código · nome · CNPJ; a lista de sugestões do navegador filtra enquanto digita. Não achou = 0.
+ */
+export function CampoIntermediador({ lista, valor, onChange, vazio, className }: {
+  lista: Intermediador[]; valor: number; onChange: (id: number) => void; vazio?: string; className?: string;
+}) {
+  const id = useId();
+  const atual = lista.find((i) => i.id === valor);
+  /** null = mostra o escolhido */
+  const [texto, setTexto] = useState<string | null>(null);
+  const achar = (t: string) => {
+    const s = t.trim().toLowerCase();
+    const dig = digitos(t);
+    return lista.find((i) => rotulo(i).toLowerCase() === s || i.codigo === t.trim() || i.nome_fantasia.toLowerCase() === s || (dig.length === 14 && i.cnpj === dig));
+  };
+  return (
+    <>
+      <input
+        list={id} value={texto ?? (atual ? rotulo(atual) : '')} placeholder={vazio} className={className}
+        onChange={(e) => (setTexto(e.target.value), onChange(achar(e.target.value)?.id ?? 0))}
+        onFocus={(e) => e.target.select()} onBlur={() => setTexto(null)}
+      />
+      <datalist id={id}>{lista.map((i) => <option key={i.id} value={rotulo(i)} />)}</datalist>
+    </>
+  );
+}
 
 /** Tabela de intermediadores de pagamento e de transação (Requisito XI, § 2º) */
 export function Intermediadores({ onFechar }: { onFechar: () => void }) {
@@ -37,6 +68,7 @@ export function Intermediadores({ onFechar }: { onFechar: () => void }) {
 
   const salvar = async () => {
     if (!edicao) return;
+    if (!edicao.id && !/^\d{3}$/.test(edicao.codigo)) return toast.error('Informe o código do intermediador com 3 dígitos.');
     if (!cnpjValido(edicao.cnpj)) return toast.error('CNPJ inválido.');
     setSalvando(true);
     try {
@@ -69,6 +101,14 @@ export function Intermediadores({ onFechar }: { onFechar: () => void }) {
       >
         <div className="space-y-4">
           <div>
+            <label className={LABEL_CLASS}>Código (3 dígitos)</label>
+            <input
+              className={`${INPUT_CLASS} font-mono w-24`} inputMode="numeric" maxLength={3} value={edicao.codigo} disabled={!!edicao.id} required
+              title={edicao.id ? 'O código não muda depois de incluído: o Registros do PAF usa ele' : 'Código de livre escolha da loja, numérico com 3 dígitos'}
+              onFocus={(e) => e.target.select()} onChange={(e) => setEdicao({ ...edicao, codigo: digitos(e.target.value).slice(0, 3) })}
+            />
+          </div>
+          <div>
             <label className={LABEL_CLASS}>Tipo</label>
             <select className={INPUT_CLASS} value={edicao.tipo} onChange={(e) => setEdicao({ ...edicao, tipo: e.target.value as 'P' | 'T' })} required>
               <option value="P">Intermediador do pagamento (adquirente, carteira digital, banco…)</option>
@@ -85,7 +125,7 @@ export function Intermediadores({ onFechar }: { onFechar: () => void }) {
           </div>
           <div>
             <label className={LABEL_CLASS}>Identificação do estabelecimento no intermediador</label>
-            <input className={INPUT_CLASS} value={edicao.identificacao} maxLength={60} onFocus={(e) => e.target.select()} onChange={(e) => setEdicao({ ...edicao, identificacao: e.target.value })} required={edicao.tipo === 'T'} />
+            <input className={INPUT_CLASS} value={edicao.identificacao} maxLength={60} onFocus={(e) => e.target.select()} onChange={(e) => setEdicao({ ...edicao, identificacao: e.target.value })} required />
           </div>
           {!!edicao.id && <Toggle checked={!!edicao.ativo} onChange={(v) => setEdicao({ ...edicao, ativo: v ? 1 : 0 })} label="Ativo" />}
         </div>
@@ -101,7 +141,7 @@ export function Intermediadores({ onFechar }: { onFechar: () => void }) {
       rodape={
         <>
           <button type="button" className={BOTAO_SECUNDARIO} onClick={onFechar}>Fechar</button>
-          <button type="button" className={`${BOTAO_PRIMARIO} flex items-center gap-1.5`} onClick={() => setEdicao({ ...NOVO })}>
+          <button type="button" className={`${BOTAO_PRIMARIO} flex items-center gap-1.5`} onClick={() => setEdicao({ ...NOVO, codigo: proximoCodigo(lista) })}>
             <Plus size={16} /> Novo
           </button>
         </>

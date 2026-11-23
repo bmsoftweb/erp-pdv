@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import { AvisoErro } from './AvisoErro';
+import { AvisoMenuFiscal } from './Janela';
 
 interface ConfirmDialogProps {
   titulo: string;
@@ -94,6 +95,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="fixed inset-0 bg-stone-950/70 backdrop-blur-xs" onClick={ocupado ? undefined : onCancelar} aria-hidden="true" />
+      <AvisoMenuFiscal />
       <div ref={caixa} role="dialog" aria-modal="true" className="relative w-full max-w-md bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-2xl shadow-2xl z-10 p-5">
         <div className="flex items-start gap-3">
           <div

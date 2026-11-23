@@ -40,13 +40,16 @@ export function avancarComEnter(e: React.KeyboardEvent, caixa: HTMLElement | nul
 /**
  * Diálogo do PDV no visual dos outros módulos (ConfirmDialog do erp-vendas): fecha no X ou no Esc.
  * Abre com o foco no primeiro campo (ou no botão principal, sem campos) e o Enter avança até confirmar.
+ * Cobre o botão do Menu Fiscal: mostra "MENU FISCAL INACESSÍVEL NESTA TELA" (Requisito VI, § 1º), menos nas
+ * janelas do próprio Menu Fiscal (`menuFiscal`).
  */
-export function Janela({ titulo, onFechar, children, largura = 'max-w-lg', rodape }: {
+export function Janela({ titulo, onFechar, children, largura = 'max-w-lg', rodape, menuFiscal = false }: {
   titulo: React.ReactNode;
   onFechar: () => void;
   children: React.ReactNode;
   largura?: string;
   rodape?: React.ReactNode;
+  menuFiscal?: boolean;
 }) {
   const caixa = useRef<HTMLDivElement>(null);
   const rodapeRef = useRef<HTMLDivElement>(null);
@@ -102,10 +105,16 @@ export function Janela({ titulo, onFechar, children, largura = 'max-w-lg', rodap
         <div className="p-5 overflow-y-auto flex-1 min-h-0">{children}</div>
         {rodape && <div ref={rodapeRef} className="px-5 py-3 border-t border-stone-200 bg-stone-50 rounded-b-2xl flex justify-end gap-2.5 shrink-0">{rodape}</div>}
       </div>
+      {!menuFiscal && <AvisoMenuFiscal />}
     </div>
   );
 }
 
-export const BOTAO = 'flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed';
+/** Aviso no pé dos diálogos que cobrem a tela do caixa (Requisito VI, § 1º, do PAF-NFC-e) */
+export const AvisoMenuFiscal = () => (
+  <p className="absolute bottom-3 inset-x-0 text-center text-[10px] font-black tracking-widest text-white/70 pointer-events-none">MENU FISCAL INACESSÍVEL NESTA TELA</p>
+);
+
+export const BOTAO ='flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed';
 export const BOTAO_PRIMARIO = `${BOTAO} bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 shadow-xs`;
 export const BOTAO_SECUNDARIO = `${BOTAO} border border-stone-300 text-stone-600 hover:bg-stone-100`;

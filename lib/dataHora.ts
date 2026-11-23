@@ -23,3 +23,14 @@ export const dataSql = (d: Date = new Date()): string => dataHoraSql(d).slice(0,
 
 /** 'aaaa-mm-dd hh:mm:ss' (já em Brasília) → data/hora da SEFAZ: 'aaaa-mm-ddThh:mm:ss-03:00' */
 export const dataHoraSefaz = (sql: string = dataHoraSql()): string => `${sql.slice(0, 19).replace(' ', 'T')}-03:00`;
+
+/**
+ * Prazo de transmissão da NFC-e de contingência (Anexo 11, art. 104, § 1º): o primeiro dia útil seguinte à emissão.
+ * 'aaaa-mm-dd' → 'aaaa-mm-dd'. ponytail: só pula sábado e domingo; feriado conta como útil (perto de feriado o aviso de vencido sai um dia antes; cadastro de feriados se incomodar)
+ */
+export function prazoContingencia(emissao: string): string {
+  const d = new Date(`${emissao.slice(0, 10)}T12:00:00Z`);
+  do d.setUTCDate(d.getUTCDate() + 1);
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+  return d.toISOString().slice(0, 10); // data pura (meio-dia UTC), sem fuso
+}

@@ -5,14 +5,14 @@ import { toast } from 'sonner';
 import { Janela, BOTAO, BOTAO_PRIMARIO, BOTAO_SECUNDARIO } from './Janela';
 import { DateField } from './DateField';
 import { INPUT_CLASS, LABEL_CLASS } from './campos';
-import { baixar, erroDe } from '@/lib/arquivos';
+import { erroDe } from '@/lib/arquivos';
 import { PAF } from '@/lib/fiscal';
 
-type Funcao = 'identificacao' | 'registros' | 'xml';
+type Funcao = 'identificacao' | 'registros' | 'dav' | 're' | 'xml';
 
 /**
  * Menu Fiscal (Requisito VI) na tela principal de vendas, sem senha.
- * Só as funções que este PAF tem: sem DAV, Requisições Externas, mesas nem combustível (§ 2º).
+ * PAF único com o erp-vendas (DAV e Requisições Externas vêm de lá); sem mesas nem combustível (§ 2º).
  */
 export function MenuFiscal({ aberto, setAberto }: { aberto: boolean; setAberto: (v: boolean) => void }) {
   const [funcao, setFuncao] = useState<Funcao | null>(null);
@@ -21,6 +21,8 @@ export function MenuFiscal({ aberto, setAberto }: { aberto: boolean; setAberto: 
   const itens: [Funcao, string][] = [
     ['identificacao', 'Identificação do PAF-NFC-e'],
     ['registros', 'Registros do PAF-NFC-e'],
+    ['dav', 'Controle dos DAV'],
+    ['re', 'Requisições Externas (RE)'],
     ['xml', 'Exportação de arquivos XML'],
   ];
 
@@ -62,6 +64,8 @@ export function MenuFiscal({ aberto, setAberto }: { aberto: boolean; setAberto: 
 
       {funcao === 'identificacao' && <Identificacao onFechar={() => setFuncao(null)} />}
       {funcao === 'registros' && <Registros onFechar={() => setFuncao(null)} />}
+      {funcao === 'dav' && <PorSituacao {...DAV} onFechar={() => setFuncao(null)} />}
+      {funcao === 're' && <PorSituacao {...RE} onFechar={() => setFuncao(null)} />}
       {funcao === 'xml' && <ExportarXml onFechar={() => setFuncao(null)} />}
     </div>
   );
@@ -86,7 +90,7 @@ function Identificacao({ onFechar }: { onFechar: () => void }) {
       .catch((e) => toast.error(e.message));
   }, []);
   return (
-    <Janela titulo="Identificação do PAF-NFC-e" onFechar={onFechar} rodape={<button type="button" className={BOTAO_SECUNDARIO} onClick={onFechar}>Fechar</button>}>
+    <Janela menuFiscal titulo="Identificação do PAF-NFC-e" onFechar={onFechar} rodape={<button type="button" className={BOTAO_SECUNDARIO} onClick={onFechar}>Fechar</button>}>
       {!d ? (
         <p className="text-sm text-stone-500 flex items-center gap-2"><RefreshCw size={14} className="animate-spin" /> Carregando…</p>
       ) : (
@@ -102,8 +106,8 @@ function Identificacao({ onFechar }: { onFechar: () => void }) {
           <section>
             <h4 className="text-xs font-black text-blue-700 uppercase tracking-wider mb-1">Programa aplicativo</h4>
             <Linha rotulo="Nome comercial" valor={PAF.nome} />
-            <Linha rotulo="Versão" valor={PAF.versao} />
-            <Linha rotulo="Última atualização instalada" valor={PAF.atualizadoEm} />
+            <Linha rotulo="Versão" valor={d.versao} />
+            <Linha rotulo="Última atualização instalada" valor={d.atualizadoEm} />
           </section>
           <section>
             <h4 className="text-xs font-black text-blue-700 uppercase tracking-wider mb-1">Arquitetura</h4>
@@ -134,12 +138,36 @@ function Periodo({ inicio, fim, onInicio, onFim }: { inicio: string; fim: string
   );
 }
 
-async function gerar(url: string, corpo: unknown, nome: string, setGerando: (v: boolean) => void) {
+const salvar = (dados: Blob, nome: string) => {
+  const url = URL.createObjectURL(dados);
+  Object.assign(document.createElement('a'), { href: url, download: nome }).click();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+};
+
+/**
+ * Gera e baixa o arquivo. O XML assinado do Requisito XII traz o arquivo texto em Base64; ele também é salvo solto
+ * (.txt), e o aviso diz o nome e o local dos dois (roteiro do Ato DIAT 56/2026: "geração e localização").
+ */
+async function gerar(url: string, corpo: unknown, nomePadrao: string, setGerando: (v: boolean) => void) {
   setGerando(true);
   try {
     const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
-    await baixar(r, nome);
-    toast.success('Arquivo gerado.');
+    if (!r.ok) throw new Error(await erroDe(r));
+    const nome = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '')?.[1] || nomePadrao;
+    const dados = await r.blob();
+    salvar(dados, nome);
+    const nomes = [nome];
+    // nroArquivo "0" = "SEM INFORMACOES" (Requisito VI, § 8º): não há texto para salvar
+    const m = nome.endsWith('.xml') ? /<arquivo nroArquivo="([^"]*)"[^>]*>(?:<!\[CDATA\[)?([A-Za-z0-9+/=\s]+)/.exec(await dados.text()) : null;
+    const base64 = m && m[1] !== '0' ? m[2].replace(/\s/g, '') : undefined;
+    if (base64) {
+      // Base64 do texto em latin1: cada caractere do atob é um byte
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      const txt = nome.replace(/\.xml$/, '.txt');
+      salvar(new Blob([bytes], { type: 'text/plain' }), txt);
+      nomes.push(txt);
+    }
+    toast.success(`Gerado${nomes.length > 1 ? 's' : ''} ${nomes.join(' e ')} na pasta Downloads do navegador.`, { duration: 15_000 });
   } catch (e: any) {
     toast.error(e?.message || String(e));
   } finally {
@@ -154,7 +182,7 @@ function Registros({ onFechar }: { onFechar: () => void }) {
   const [produtos, setProdutos] = useState('');
   const [gerando, setGerando] = useState(false);
   return (
-    <Janela
+    <Janela menuFiscal
       titulo="Registros do PAF-NFC-e"
       onFechar={onFechar}
       rodape={
@@ -192,13 +220,54 @@ function Registros({ onFechar }: { onFechar: () => void }) {
   );
 }
 
+const DAV = {
+  titulo: 'Controle dos DAV', url: '/api/menu-fiscal/controle-dav', arquivo: 'controle-dav.xml',
+  situacoes: [['todos', 'Totalidade dos DAV'], ['aberto', 'DAV em aberto'], ['df', 'DAV associados a um DF-e'], ['baixado', 'DAV baixados']],
+};
+const RE = {
+  titulo: 'Requisições Externas (RE)', url: '/api/menu-fiscal/requisicoes-externas', arquivo: 'requisicoes-externas.xml',
+  situacoes: [['todas', 'Totalidade das RE'], ['recebida', 'RE recebidas'], ['atendida', 'RE atendidas'], ['denegada', 'RE denegadas']],
+};
+
+/** Arquivo III (DAV) ou II (RE): período e situação (Requisito VI, III e IV) */
+function PorSituacao({ titulo, url, arquivo, situacoes, onFechar }: typeof DAV & { onFechar: () => void }) {
+  const [inicio, setInicio] = useState('');
+  const [fim, setFim] = useState('');
+  const [situacao, setSituacao] = useState(situacoes[0][0]);
+  const [gerando, setGerando] = useState(false);
+  return (
+    <Janela menuFiscal
+      titulo={titulo}
+      onFechar={onFechar}
+      rodape={
+        <>
+          <button type="button" className={BOTAO_SECUNDARIO} onClick={onFechar}>Fechar</button>
+          <button type="button" className={BOTAO_PRIMARIO} disabled={gerando} onClick={() => gerar(url, { inicio, fim, situacao }, arquivo, setGerando)}>
+            {gerando ? 'Gerando…' : 'Gerar e assinar'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <Periodo inicio={inicio} fim={fim} onInicio={setInicio} onFim={setFim} />
+        <div>
+          <label className={LABEL_CLASS}>Situação</label>
+          <select className={INPUT_CLASS} value={situacao} onChange={(e) => setSituacao(e.target.value)} required>
+            {situacoes.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+          </select>
+        </div>
+      </div>
+    </Janela>
+  );
+}
+
 function ExportarXml({ onFechar }: { onFechar: () => void }) {
   const [inicio, setInicio] = useState('');
   const [fim, setFim] = useState('');
-  const [modelo, setModelo] = useState<'65' | '55'>('65');
+  const [modelo, setModelo] = useState<'todos' | '65' | '55'>('todos');
   const [gerando, setGerando] = useState(false);
   return (
-    <Janela
+    <Janela menuFiscal
       titulo="Exportação de arquivos XML"
       onFechar={onFechar}
       rodape={
@@ -214,7 +283,8 @@ function ExportarXml({ onFechar }: { onFechar: () => void }) {
         <Periodo inicio={inicio} fim={fim} onInicio={setInicio} onFim={setFim} />
         <div>
           <label className={LABEL_CLASS}>Modelo</label>
-          <select className={INPUT_CLASS} value={modelo} onChange={(e) => setModelo(e.target.value as '65' | '55')} required>
+          <select className={INPUT_CLASS} value={modelo} onChange={(e) => setModelo(e.target.value as 'todos' | '65' | '55')} required>
+            <option value="todos">Todos (NFC-e e NF-e)</option>
             <option value="65">NFC-e</option>
             <option value="55">NF-e</option>
           </select>

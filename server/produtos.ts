@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { pool } from './db.js';
 import { grupoDa } from './auth.js';
+import { dataSql } from '../lib/dataHora.js';
+import { listasDoClube, precoDoClube } from './clube.js';
 
 export function createProdutosRouter() {
   const r = Router();
@@ -26,16 +28,22 @@ export function createProdutosRouter() {
   r.get('/produtos/sync', async (_req, res) => {
     try {
       // categoria e foto (a principal, senão a primeira) servem à pesquisa por categoria (código 77);
-      // a unidade (KG) diz que o produto é pesado na balança do caixa
+      // a unidade (KG) diz que o produto é pesado na balança do caixa; serviço não sai em NFC-e: nem vem para a busca
       const [rows] = await pool.execute(
-        `SELECT p.id, p.nome, p.codigo_barras, p.preco_venda, p.iat, p.categoria_id, u.sigla AS unidade,
+        `SELECT p.id, p.nome, p.codigo_barras, p.preco_venda, p.iat, p.categoria_id, p.marca_id, u.sigla AS unidade,
                 (SELECT i.url FROM cad_produtos_imagens i WHERE i.produto_id = p.id AND i.variante_id IS NULL
                   ORDER BY i.principal DESC, i.ordem, i.id LIMIT 1) AS foto
            FROM cad_produtos p LEFT JOIN cad_produtos_unidades_medida u ON u.id = p.unidade_id
-          WHERE p.ativo = 1 AND p.grupo_id = ?`,
+          WHERE p.ativo = 1 AND COALESCE(p.servico, 0) = 0 AND p.grupo_id = ?`,
         [grupoDa(res)]
       );
-      res.json(rows);
+      // Clube de descontos: preço das listas do clube em vigor hoje (vale até o fim da lista; a próxima sincronização renova)
+      const hoje = dataSql();
+      const listas = await listasDoClube(grupoDa(res), hoje);
+      res.json((rows as any[]).map(({ marca_id, ...p }) => {
+        const clube = listas.length ? precoDoClube(listas, hoje, { ...p, marca_id }) : null;
+        return clube ? { ...p, preco_clube: clube.preco, clube_ate: clube.ate } : p;
+      }));
     } catch (error) {
       console.error('Erro ao sincronizar produtos:', error);
       res.status(500).json({ error: 'Erro interno no servidor' });

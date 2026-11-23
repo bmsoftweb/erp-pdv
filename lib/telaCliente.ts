@@ -25,10 +25,23 @@ export interface EstadoCliente {
   finalizando: boolean;
   pago: number;
   troco: number;
+  /** Consumidor identificado: o nome do cadastro ou, sem cadastro, o CPF/CNPJ */
+  cliente?: string | null;
+  /** Associado do clube de descontos: os itens já vêm com o preço do clube */
+  clube?: boolean;
 }
 
-/** PIX em cobrança: o copia e cola (vira QR Code na tela do cliente); null tira o QR */
-type Mensagem = { tipo: 'estado'; estado: EstadoCliente } | { tipo: 'pix'; copiaECola: string | null; valor: number } | { tipo: 'ola' };
+/**
+ * PIX em cobrança: o copia e cola (vira QR Code na tela do cliente); null tira o QR.
+ * CPF na nota: o caixa pede (pedirCpf) ou desiste (cancelarCpf); o cliente responde com o CPF ou null (sem CPF).
+ */
+type Mensagem =
+  | { tipo: 'estado'; estado: EstadoCliente }
+  | { tipo: 'pix'; copiaECola: string | null; valor: number }
+  | { tipo: 'ola' }
+  | { tipo: 'pedirCpf' }
+  | { tipo: 'cancelarCpf' }
+  | { tipo: 'cpf'; cpf: string | null };
 
 const CANAL = 'pdv-tela-cliente';
 const JANELA = 'pdv-tela-cliente';
@@ -69,6 +82,9 @@ export function usePixNoCliente(copiaECola: string | null | undefined, valor: nu
 }
 
 export const pedirEstado = () => enviar({ tipo: 'ola' });
+export const pedirCpfAoCliente = () => enviar({ tipo: 'pedirCpf' });
+export const cancelarCpfNoCliente = () => enviar({ tipo: 'cancelarCpf' });
+export const responderCpf = (cpf: string | null) => enviar({ tipo: 'cpf', cpf });
 
 /** Tela do cliente ligada neste computador: reabre sozinha ao iniciar o caixa */
 export function telaClienteLembrada() {

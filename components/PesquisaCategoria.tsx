@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ImageOff, LayoutGrid, X } from 'lucide-react';
 import { db, type LocalProduct } from '@/lib/localDB';
+import { AvisoMenuFiscal } from './Janela';
 
 /** Categoria marcada para a pesquisa (pdv_pesquisa) com os ids dela e das subcategorias */
 interface Categoria {
@@ -108,6 +109,7 @@ export function PesquisaCategoria({ onFechar, onEscolher }: { onFechar: () => vo
 
   return (
     <div className="fixed inset-0 z-[150] bg-stone-900/60 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onFechar()}>
+      <AvisoMenuFiscal />
       <div role="dialog" aria-label="Pesquisa por categoria" onKeyDown={teclas} className="bg-white rounded-xl shadow-2xl w-full max-w-6xl h-[90%] flex flex-col overflow-hidden">
         <header className="flex items-center gap-2 px-5 pt-4 border-b border-stone-200 shrink-0">
           <LayoutGrid size={20} className="text-blue-600 mb-3" />

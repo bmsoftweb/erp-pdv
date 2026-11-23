@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Ban, FileText, HandCoins, Mail, Printer, RefreshCw } from 'lucide-react';
+import { Ban, Eraser, FileText, HandCoins, Mail, Printer, RefreshCw, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { Janela, BOTAO_PRIMARIO, BOTAO_SECUNDARIO } from './Janela';
 import { MenuFiscalInacessivel } from './MenuFiscal';
 import { INPUT_CLASS, LABEL_CLASS } from './campos';
-import { baixar, erroDe, imprimirDanfe } from '@/lib/arquivos';
+import { AvisoErro } from './AvisoErro';
+import { baixar, erroDe, imprimirDanfe, reimprimirAutorizadas } from '@/lib/arquivos';
 import { ESTORNO_NFCE, limiteCancelamento } from '@/lib/fiscal';
 
 interface Nota {
@@ -17,6 +18,7 @@ interface Nota {
   valor_total: string;
   destinatario_documento: string | null;
   motivo: string | null;
+  referencia: string;
   /** dhRecbto do protocolo: conta os 30 min para cancelar a NFC-e */
   autorizacao: string | null;
 }
@@ -27,6 +29,11 @@ const prazo = (n: Nota) => {
   const limite = limiteCancelamento(n.modelo, n.autorizacao);
   return limite == null ? null : { ate: hora(limite), vencido: Date.now() > limite };
 };
+
+interface Abandonado { modelo: string; serie: number; numero: number; data: string | null; motivo: string | null }
+
+/** NFC-e de contingência (tpEmis 9) recusada pela SEFAZ: gera de novo com o mesmo número (Anexo 11, art. 104, § 4º) */
+const recusada = (n: Nota) => n.situacao === 'rejeitada' && n.chave?.[34] === '9';
 
 const COR: Record<string, string> = {
   autorizada: 'bg-emerald-50 text-emerald-700 border-emerald-100',
@@ -42,6 +49,9 @@ export function NotasPdv({ onFechar, confirmar }: { onFechar: () => void; confir
   const [carregando, setCarregando] = useState(false);
   const [cancelando, setCancelando] = useState<Nota | null>(null);
   const [enviando, setEnviando] = useState<Nota | null>(null);
+  const [alerta, setAlerta] = useState('');
+  /** Números reservados e não usados (rascunho/rejeitada): a inutilizar (Anexo 11, art. 108) */
+  const [abandonados, setAbandonados] = useState<Abandonado[]>([]);
   /** Nota escolhida pelas setas (ou pelo clique) */
   const [sel, setSel] = useState(0);
 
@@ -49,7 +59,9 @@ export function NotasPdv({ onFechar, confirmar }: { onFechar: () => void; confir
     setCarregando(true);
     try {
       // Antes de listar, tenta transmitir as de contingência (o caixa vê a situação atualizada)
-      await fetch('/api/nfce/contingencia', { method: 'POST' }).catch(() => {});
+      const fila = await fetch('/api/nfce/contingencia', { method: 'POST' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      reimprimirAutorizadas(fila?.autorizadas, confirmar).catch((e) => toast.error(e.message));
+      fetch('/api/nfce/pendentes').then((r) => (r.ok ? r.json() : null)).then((d) => d && setAbandonados(d.itens ?? [])).catch(() => {});
       const r = await fetch('/api/nfce/documentos');
       if (!r.ok) throw new Error(await erroDe(r));
       setNotas(await r.json());
@@ -70,7 +82,30 @@ export function NotasPdv({ onFechar, confirmar }: { onFechar: () => void; confir
   }, []);
   const cancelar = (n: Nota) => (prazo(n)?.vencido ? toast.warning(ESTORNO_NFCE) : setCancelando(n));
 
+  const regerar = async (n: Nota) => {
+    if (!(await confirmar(`Gerar de novo a NFC-e ${n.numero} de contingência (mesmo número e data) e transmitir à SEFAZ?`))) return;
+    const r = await fetch('/api/nfce/regerar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ referencia: n.referencia }) });
+    if (!r.ok) return toast.error(await erroDe(r));
+    const d = await r.json();
+    if (d.situacao === 'autorizada') {
+      toast.success(`NFC-e ${n.numero} autorizada. Reimprima o DANFE e entregue ao cliente.`);
+      imprimir({ ...n, chave: d.chave || n.chave }); // a regerada pode ter outra chave
+    } else if (d.situacao === 'contingencia') {
+      setAlerta(`NFC-e ${n.numero} gerada de novo em contingência: será transmitida sozinha e o DANFE reimpresso quando a SEFAZ autorizar.`);
+    } else toast.error(`NFC-e ${n.numero}: ${[d.cStat, d.motivo].filter(Boolean).join(' - ') || d.situacao}`);
+    carregar();
+  };
+
   const imprimir = (n: Nota) => imprimirDanfe(n.chave).catch((e) => toast.error(e.message));
+
+  const inutilizar = async (a: Abandonado) => {
+    const nome = `${a.modelo === '65' ? 'NFC-e' : 'NF-e'} ${a.numero} (série ${a.serie})`;
+    if (!(await confirmar(`Inutilizar o número da ${nome}? A inutilização vai à SEFAZ e não pode ser desfeita.`))) return;
+    const r = await fetch('/api/nfce/inutilizar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelo: a.modelo, serie: a.serie, numero: a.numero }) });
+    if (!r.ok) return toast.error(await erroDe(r));
+    toast.success(`Número da ${nome} inutilizado: ${(await r.json()).motivo}`);
+    carregar();
+  };
 
   const econf = async (n: Nota) => {
     if (!(await confirmar(`Enviar a conciliação financeira (EConf) dos pagamentos da ${n.modelo === '65' ? 'NFC-e' : 'NF-e'} ${n.numero}?`))) return;
@@ -127,6 +162,23 @@ export function NotasPdv({ onFechar, confirmar }: { onFechar: () => void; confir
       </div>
 
       <div className="flex-1 overflow-auto p-5">
+        {abandonados.length > 0 && (
+          <div className="mb-4 border border-amber-200 bg-amber-50 rounded-lg p-3 text-sm text-amber-900">
+            <p className="font-semibold mb-2">Números reservados e não usados: inutilize (Anexo 11, art. 108)</p>
+            <ul className="space-y-1">
+              {abandonados.map((a) => (
+                <li key={`${a.modelo}-${a.serie}-${a.numero}`} className="flex items-center gap-3">
+                  <span className="font-mono">{a.modelo === '65' ? 'NFC-e' : 'NF-e'} série {a.serie} nº {a.numero}</span>
+                  {a.data && <span className="font-mono text-amber-700">{dataBr(a.data)}</span>}
+                  <span className="flex-1 min-w-0 truncate text-amber-700" title={a.motivo || undefined}>{a.motivo}</span>
+                  <button type="button" className={`${ICONE} text-red-600 hover:bg-red-50`} title="Inutilizar" data-dica-desc="Inutiliza este número na SEFAZ" onClick={() => inutilizar(a)}>
+                    <Eraser size={16} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <table className="w-full text-sm border border-stone-200">
           <thead className="bg-stone-50 text-xs text-stone-500 sticky top-0">
             <tr>
@@ -186,6 +238,17 @@ export function NotasPdv({ onFechar, confirmar }: { onFechar: () => void; confir
                   >
                     <HandCoins size={16} />
                   </button>
+                  {recusada(n) ? (
+                  <button
+                    type="button"
+                    className={`${ICONE} text-amber-600 hover:bg-amber-50`}
+                    title="Gerar de novo"
+                    data-dica-desc="Contingência recusada pela SEFAZ: gera com o mesmo número e data e transmite (Anexo 11, art. 104, § 4º)"
+                    onClick={() => regerar(n)}
+                  >
+                    <RotateCcw size={16} />
+                  </button>
+                  ) : (
                   <button
                     type="button"
                     className={`${ICONE} text-red-600 hover:bg-red-50`}
@@ -204,6 +267,7 @@ export function NotasPdv({ onFechar, confirmar }: { onFechar: () => void; confir
                   >
                     <Ban size={16} />
                   </button>
+                  )}
                 </td>
               </tr>
             ))}
@@ -217,6 +281,7 @@ export function NotasPdv({ onFechar, confirmar }: { onFechar: () => void; confir
       </div>
 
       {enviando && <XmlCliente nota={enviando} onFechar={() => setEnviando(null)} />}
+      {alerta && <AvisoErro tom="alerta" mensagem={alerta} onFechar={() => setAlerta('')} />}
       {cancelando && <Cancelar nota={cancelando} onFechar={() => setCancelando(null)} onCancelada={() => { setCancelando(null); carregar(); }} />}
     </div>
   );
