@@ -454,7 +454,7 @@ export function createNotasRouter() {
     res.send(d.xml);
   }));
 
-  /** XML e DANFE por e-mail ao cliente, pelo SMTP configurado no erp-nfe */
+  /** XML e DANFE por e-mail ao cliente, pelo erp-nfe, com o SMTP da empresa (BM-Master) */
   r.post('/nfce/email', rota(async (req, res, s) => {
     const uid = Number(s.userId);
     const emit = await emitenteDe(uid, empresaDa(res));

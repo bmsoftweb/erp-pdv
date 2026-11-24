@@ -2,6 +2,10 @@
 
 Mais recente primeiro. PATCH a cada envio ao GitHub; MAJOR/MINOR só quando pedido.
 
+## 0.1.10 — 2026-11-24
+
+- E-mail da nota: sai pelo erp-nfe com a conta de e-mail da empresa gravada no BM-Master.
+
 ## 0.1.9 — 2026-11-23
 
 - Marca BM na tela: mensagens e textos citam o "BM-Master" (no lugar de "ERP-Master"). Vale para o token do caixa, o aviso da balança e os erros de registro.
