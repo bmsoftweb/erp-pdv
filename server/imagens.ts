@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { pool } from './db.js';
 import type { SessionData } from './session.js';
 
-// Vitrine da tela de venda (pdv_imagens, extras/2026-11-20_pdv_imagens.sql), cadastrada no BM-Master
+// Vitrine da tela de venda (pdv_imagens, extras/2026-11-20_pdv_imagens.sql), cadastrada no ERP-Master
 // (Configurações da empresa → Imagens do PDV): as ativas da filial que ainda não venceram, na ordem, com o período.
 // As que começam mais tarde também vão: o PDV guarda tudo no cache do navegador e filtra pelo dia, então a imagem
 // de uma data entra no dia certo mesmo sem internet. O pool roda em -03:00, então CURDATE() é o dia de Brasília.

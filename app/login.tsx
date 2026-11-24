@@ -204,7 +204,7 @@ export default function LoginPage({ onEntrou }: { onEntrou: () => void }) {
                   />
                 </div>
                 <p className="text-[11px] text-stone-500 mt-1.5 ml-1">
-                  O token está no BM-Master, em Empresas → Configurações → Caixas (PDV). Daqui em diante este computador só entra na filial desse caixa.
+                  O token está no ERP-Master, em Empresas → Configurações → Caixas (PDV). Daqui em diante este computador só entra na filial desse caixa.
                 </p>
               </div>
               <div className="flex items-center gap-3">

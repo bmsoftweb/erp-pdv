@@ -1,4 +1,4 @@
-﻿// PDV aberto pelo BM-Master (entrada automática, /api/entrar → /?master=1): ao Sair, fecha a aba do Master em
+﻿// PDV aberto pelo ERP-Master (entrada automática, /api/entrar → /?master=1): ao Sair, fecha a aba do Master em
 // vez de ir para o login. Marca guardada no sessionStorage desta aba; aberto direto, o Sair segue normal.
 const CHAVE = 'bm_pdv_origem_master';
 

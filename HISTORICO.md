@@ -2,6 +2,11 @@
 
 Mais recente primeiro. PATCH a cada envio ao GitHub; MAJOR/MINOR só quando pedido.
 
+## 0.1.8 — 2026-11-23
+
+- Custo médio nas saídas: as vendas gravam `custo_medio` e `estoque_valor` no movimento, mantendo o médio da filial (mesma conta do erp-compras).
+- Nome "ERP-Master" no lugar de "BM-Master" em mensagens e comentários.
+
 ## 0.1.7 — 2026-11-23
 
 - PAF-NFC-e (Ato DIAT 54/2026 e RICMS/SC Anexo 11), adequações da auditoria:
