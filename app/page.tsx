@@ -956,7 +956,7 @@ ${ate} (primeiro dia útil seguinte à emissão, Anexo 11, art. 104, § 1º).`);
   const pesar = async (pedidoDoOperador = false) => {
     const cfg = balancaDoCaixa();
     if (!cfg) {
-      if (pedidoDoOperador) toast.warning('Caixa sem balança no cadastro: digite o peso.', { description: 'A balança se liga no cadastro do caixa (ERP-Master → Caixas (PDV)).' });
+      if (pedidoDoOperador) toast.warning('Caixa sem balança no cadastro: digite o peso.', { description: 'A balança se liga no cadastro do caixa (BM-Master → Caixas (PDV)).' });
       return;
     }
     if (pesando) return;
@@ -1971,7 +1971,7 @@ ${avisoPendentes(fila.length)}`);
               </div>
             )}
 
-            {/* Promoções e datas comemorativas (ERP-Master → Imagens do PDV) */}
+            {/* Promoções e datas comemorativas (BM-Master → Imagens do PDV) */}
             {!isCheckoutOpen && <Vitrine />}
          </div>
 

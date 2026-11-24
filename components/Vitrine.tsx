@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { isoDeHoje } from './DateField';
 
-/** Imagem ativa da filial que ainda não venceu (pdv_imagens, cadastrada no ERP-Master) */
+/** Imagem ativa da filial que ainda não venceu (pdv_imagens, cadastrada no BM-Master) */
 interface Imagem {
   id: number;
   titulo: string | null;

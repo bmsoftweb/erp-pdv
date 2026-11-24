@@ -25,7 +25,7 @@ const ler = (armazenamento: () => Storage, chave: string) => {
 };
 
 /**
- * Ligado neste computador: a escolha à mão desta sessão; sem ela, o cadastro do caixa (ERP-Master); sem caixa
+ * Ligado neste computador: a escolha à mão desta sessão; sem ela, o cadastro do caixa (BM-Master); sem caixa
  * (ou antes da coluna existir), liga sozinho em tela só de toque (sem mouse).
  */
 export function tecladoLigado(): boolean {

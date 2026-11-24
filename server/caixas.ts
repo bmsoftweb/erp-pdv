@@ -5,11 +5,11 @@ import { ErroAcesso, type Filial } from './acessoErp.js';
 import { sessionOptions, terminalOptions, type SessionData, type TerminalData } from './session.js';
 import { dataHoraSql } from '../lib/dataHora.js';
 
-// Caixas do PDV (pdv_caixas, extras/2026-11-20_pdv_caixas.sql), cadastrados no ERP-Master. Cada computador é
+// Caixas do PDV (pdv_caixas, extras/2026-11-20_pdv_caixas.sql), cadastrados no BM-Master. Cada computador é
 // registrado num caixa com o token do cadastro (cookie lacrado bm_pdv_terminal). Computador registrado só entra na
 // filial do caixa e, se o caixa tiver usuário, só com ele; usuário amarrado a um caixa só entra pelo computador dele.
 
-// Token NNNN-NNNN gerado pelo ERP-Master (Configurações da empresa → Caixas (PDV)).
+// Token NNNN-NNNN gerado pelo BM-Master (Configurações da empresa → Caixas (PDV)).
 // ponytail: sem limite de tentativas no registro; o token sozinho não entra (o login ainda pede usuário e senha).
 // Se precisar, contar erros por IP no POST /caixa-local.
 
@@ -69,7 +69,7 @@ export async function conferirCaixa(req: Request, res: Response, u: any, filiais
     throw e;
   }
   const { t, caixa } = registro;
-  if (!caixa) throw new ErroAcesso(SEM_REGISTRO, 'Este computador não está registrado em nenhum caixa. Registre com o token do caixa (ERP-Master → Empresas → Configurações → Caixas (PDV)).');
+  if (!caixa) throw new ErroAcesso(SEM_REGISTRO, 'Este computador não está registrado em nenhum caixa. Registre com o token do caixa (BM-Master → Empresas → Configurações → Caixas (PDV)).');
   if (caixa.usuario_id != null && Number(caixa.usuario_id) !== Number(u.id)) {
     throw new ErroAcesso(403, `Este computador é o caixa ${caixa.numero} e só aceita o usuário ${caixa.login}.`);
   }
@@ -101,7 +101,7 @@ export function createCaixaLocalRouter() {
   });
 
   // O token é a autorização e vale para um computador só: o primeiro registro o consome (registrado_em). Para outro
-  // computador (ou o mesmo, depois de limpar o navegador), o ERP-Master gera um token novo, que zera o registrado_em.
+  // computador (ou o mesmo, depois de limpar o navegador), o BM-Master gera um token novo, que zera o registrado_em.
   r.post('/caixa-local', async (req, res) => {
     try {
       const token = normalizarToken(req.body?.token);
@@ -111,7 +111,7 @@ export function createCaixaLocalRouter() {
       // Condicional no UPDATE: dois computadores registrando ao mesmo tempo, só um consome o token
       const [uso]: any = await pool.query('UPDATE pdv_caixas SET registrado_em = ? WHERE id = ? AND token = ? AND registrado_em IS NULL', [dataHoraSql(), c.id, token]);
       if (!uso.affectedRows) {
-        return void res.status(409).json({ error: `Este token já foi usado no computador do caixa ${c.numero}. Para registrar outro computador, gere um token novo no ERP-Master (Empresas → Configurações → Caixas (PDV)).` });
+        return void res.status(409).json({ error: `Este token já foi usado no computador do caixa ${c.numero}. Para registrar outro computador, gere um token novo no BM-Master (Empresas → Configurações → Caixas (PDV)).` });
       }
       const t = await getIronSession<TerminalData>(req, res, terminalOptions);
       t.caixaId = Number(c.id);

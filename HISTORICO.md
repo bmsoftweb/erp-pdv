@@ -2,6 +2,10 @@
 
 Mais recente primeiro. PATCH a cada envio ao GitHub; MAJOR/MINOR só quando pedido.
 
+## 0.1.9 — 2026-11-23
+
+- Marca BM na tela: mensagens e textos citam o "BM-Master" (no lugar de "ERP-Master"). Vale para o token do caixa, o aviso da balança e os erros de registro.
+
 ## 0.1.8 — 2026-11-23
 
 - Custo médio nas saídas: as vendas gravam `custo_medio` e `estoque_valor` no movimento, mantendo o médio da filial (mesma conta do erp-compras).
